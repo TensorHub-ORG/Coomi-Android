@@ -49,9 +49,12 @@ public class CoomiLauncherActivity extends Activity {
     private TextView mStatusText;
     private Button mNotificationButton;
     private Button mBatteryButton;
+    private Button mRootButton;
     private Button mContinueButton;
 
     private Handler mHandler = new Handler(Looper.getMainLooper());
+    private RootAccessController mRootAccessController;
+    private boolean mRootCheckInFlight = false;
     private boolean mPermissionsDone = false;
     private boolean mContinuePersisted = false;
     private boolean mSettingsMode = false;
@@ -67,7 +70,9 @@ public class CoomiLauncherActivity extends Activity {
         mStatusText = findViewById(R.id.launcher_status_text);
         mNotificationButton = findViewById(R.id.btn_notification_permission);
         mBatteryButton = findViewById(R.id.btn_battery_permission);
+        mRootButton = findViewById(R.id.btn_root_permission);
         mContinueButton = findViewById(R.id.btn_continue);
+        mRootAccessController = new RootAccessController();
 
         mContinuePersisted = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getBoolean(PREF_CONTINUE, false);
@@ -76,6 +81,7 @@ public class CoomiLauncherActivity extends Activity {
 
         mNotificationButton.setOnClickListener(v -> openNotificationSettings());
         mBatteryButton.setOnClickListener(v -> requestBatteryExemption());
+        mRootButton.setOnClickListener(v -> checkRootPermission());
         mContinueButton.setOnClickListener(v -> {
             mPermissionsDone = true;
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -113,6 +119,7 @@ public class CoomiLauncherActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         mHandler.removeCallbacksAndMessages(null);
+        if (mRootAccessController != null) mRootAccessController.cancel();
     }
 
     // ── Phase display ──
@@ -183,6 +190,42 @@ public class CoomiLauncherActivity extends Activity {
 
         // 演示包不为权限拦人：这两个开关只影响引擎常驻，而演示包没有引擎。
         mContinueButton.setEnabled(CoomiDemo.isEnabled() || (notifOk && battOk));
+    }
+
+    private void checkRootPermission() {
+        if (mRootCheckInFlight || mRootAccessController == null) return;
+        mRootCheckInFlight = true;
+        mRootButton.setEnabled(false);
+        mRootButton.setText(R.string.coomi_root_checking);
+        mRootAccessController.check(result -> {
+            if (isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
+                return;
+            }
+            mRootCheckInFlight = false;
+            switch (result.status) {
+                case GRANTED:
+                    mRootButton.setText(R.string.coomi_authorized);
+                    mRootButton.setEnabled(false);
+                    break;
+                case DENIED:
+                    mRootButton.setText(R.string.coomi_root_retry);
+                    mRootButton.setEnabled(true);
+                    break;
+                case TIMEOUT:
+                    mRootButton.setText(R.string.coomi_root_retry);
+                    mRootButton.setEnabled(true);
+                    break;
+                case UNAVAILABLE:
+                    mRootButton.setText(R.string.coomi_root_unavailable);
+                    mRootButton.setEnabled(true);
+                    break;
+                case ERROR:
+                default:
+                    mRootButton.setText(R.string.coomi_root_retry);
+                    mRootButton.setEnabled(true);
+                    break;
+            }
+        });
     }
 
     @Override

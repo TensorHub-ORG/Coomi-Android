@@ -1,0 +1,1 @@
+{"cwd":"/data/data/com.coomi.android/files/home","engine":{"initialized":true,"llm":"deepseek-v4-flash","tools":19},"runtime":"Rust 2.0.0 (aarch64)","status":"ok","version":"2.0.0"}

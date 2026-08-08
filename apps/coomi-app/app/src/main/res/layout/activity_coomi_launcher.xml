@@ -199,6 +199,66 @@
                             android:textColor="@color/coomi_permission_text"
                             android:text="@string/coomi_allow"/>
                     </LinearLayout>
+
+                    <View style="@style/Coomi.Divider"/>
+
+                    <!-- Root 权限（可选增强权限） -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="@dimen/coomi_space_l"
+                        android:paddingEnd="@dimen/coomi_space_m"
+                        android:paddingTop="@dimen/coomi_space_l"
+                        android:paddingBottom="@dimen/coomi_space_l">
+
+                        <FrameLayout
+                            android:layout_width="38dp"
+                            android:layout_height="38dp"
+                            android:background="@drawable/coomi_bg_icon_tile">
+
+                            <ImageView
+                                android:layout_width="@dimen/coomi_icon_m"
+                                android:layout_height="@dimen/coomi_icon_m"
+                                android:layout_gravity="center"
+                                android:src="@drawable/coomi_ic_shield"
+                                android:tint="?attr/coomiBlue"
+                                android:contentDescription="@null"/>
+                        </FrameLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:layout_marginStart="@dimen/coomi_space_m"
+                            android:layout_marginEnd="@dimen/coomi_space_s">
+
+                            <TextView
+                                style="@style/Coomi.Text.Body"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:textStyle="bold"
+                                android:text="@string/coomi_root_title"/>
+
+                            <TextView
+                                style="@style/Coomi.Text.Caption"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="3dp"
+                                android:text="@string/coomi_root_desc"/>
+                        </LinearLayout>
+
+                        <Button
+                            android:id="@+id/btn_root_permission"
+                            style="@style/Coomi.Button.Pill"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/coomi_bg_pill_permission"
+                            android:textColor="@color/coomi_permission_text"
+                            android:text="@string/coomi_allow"/>
+                    </LinearLayout>
                 </LinearLayout>
 
                 <TextView

@@ -1,0 +1,17 @@
+[Unit]
+Description=Coomi Website Stats API (PostgreSQL on Tencent Cloud via SSH tunnel)
+After=network.target coomi-db-tunnel.service
+Wants=coomi-db-tunnel.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/coomi-stats
+ExecStart=/opt/coomi-stats/venv/bin/uvicorn stats_server:app --host 127.0.0.1 --port 8062 --proxy-headers
+Restart=always
+RestartSec=3
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=DATABASE_URL=postgresql://coomi_stats:j9P5avVg0BP_uOnohvoFslb0GJRLkaJBXvalNW7AgWtpQN5T@127.0.0.1:55432/coomi_stats?sslmode=disable
+
+[Install]
+WantedBy=multi-user.target

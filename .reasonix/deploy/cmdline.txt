@@ -1,0 +1,8 @@
+* daemon not running; starting now at tcp:5037
+* daemon started successfully
+PID=15222
+/data/app/~~40bAN4VmH_n1p_S8RHOJ4g==/com.coomi.android-o6r0WBPXliaLYW8kcre-ew==/lib/arm64/libcoomi.so --home /data/data/com.coomi.android/files/home/.coomi --cwd /data/data/com.coomi.android/files/home serve --port 46085 --token cf6affc70f491d01f93c7a4ff7efe0d27a6a33b7ccbfe5ee61e0af480f18321f00c4bae0cbfdfb7de83a20ca1b439080ca3d9775e1455b678761e5a3dbc61e53 --static-dir /data/user/0/com.coomi.android/files/web 
+PID=15226
+/data/app/~~40bAN4VmH_n1p_S8RHOJ4g==/com.coomi.android-o6r0WBPXliaLYW8kcre-ew==/lib/arm64/libcoomi.so --home /data/data/com.coomi.android/files/home/.coomi --cwd /data/data/com.coomi.android/files/home serve --port 23736 --token faca02b3a0d507477dd881d59e8d87b98145bb7ca7d2afcb0ff1ae9851ee07560d678bf75954d6c060e5ffbdab12f6466acfc29268d44b15ddbb5eb4b9415a5d --static-dir /data/user/0/com.coomi.android/files/web 
+PID=15312
+/data/app/~~40bAN4VmH_n1p_S8RHOJ4g==/com.coomi.android-o6r0WBPXliaLYW8kcre-ew==/lib/arm64/libcoomi.so --home /data/data/com.coomi.android/files/home/.coomi --cwd /data/data/com.coomi.android/files/home serve --port 27157 --token 02eec54394ac2ea63ca961d4b6cfd1ebab18014e95dd75d0a14c9073cbda01a0eac4eefcf1895c206f3c382bd5f0dc954e62f6a107cb10b871b1322be4a58612 --static-dir /data/user/0/com.coomi.android/files/web 

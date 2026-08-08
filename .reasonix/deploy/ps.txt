@@ -1,0 +1,3 @@
+u0_a513       15222  31974   10983916   8852 futex_wait_queue    0 S libcoomi.so
+u0_a513       15226  31974   10963436   9208 futex_wait_queue    0 S libcoomi.so
+u0_a513       15312  31974   10975724   9568 futex_wait_queue    0 S libcoomi.so

@@ -1,0 +1,58 @@
+* daemon not running; starting now at tcp:5037
+* daemon started successfully
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Error: Address already in use (os error 98)
+
+Stack backtrace:
+   0: <unknown>
+   1: <unknown>
+   2: <unknown>
+   3: <unknown>
+   4: <unknown>
+   5: <unknown>
+   6: <unknown>
+   7: <unknown>
+   8: <unknown>
+   9: <unknown>
+  10: __libc_init
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Error: Address already in use (os error 98)
+
+Stack backtrace:
+   0: <unknown>
+   1: <unknown>
+   2: <unknown>
+   3: <unknown>
+   4: <unknown>
+   5: <unknown>
+   6: <unknown>
+   7: <unknown>
+   8: <unknown>
+   9: <unknown>
+  10: __libc_init
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:8765
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:56163
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:44148
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:21297
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:38016
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:28757
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge shutting down; all child processes terminated
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:20567
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:48139
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:59053
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:26498
+Coomi Rust bridge 2.0.0 listening on http://127.0.0.1:55840

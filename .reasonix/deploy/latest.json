@@ -1,0 +1,12 @@
+{
+  "version": "1.1.0",
+  "versionCode": 4,
+  "platform": "android",
+  "arch": "arm64-v8a",
+  "minAndroid": "7.0",
+  "file": "Coomi-Android-arm64-v1.1.0.apk",
+  "size": 46062453,
+  "sha256": "3f0b387931fff161a26d7be2daea5f7e0f2aa99cfc6c17c81b7c432bc9b7da34",
+  "publishedAt": "2026-08-02T05:00:00Z",
+  "notes": "v1.1.0 更新内容：\n• 独立包名 com.coomi.android\n• 修复联网搜索与工具执行\n• 会话上下文隔离（按目录）\n• 停止按钮真正终止工具调用\n• 会话/目录管理、文件管理、SKILL/MCP 管理\n• 暗色主题跟随系统、检查更新"
+}
