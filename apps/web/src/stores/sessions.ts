@@ -46,6 +46,8 @@ export interface SessionMeta {
   renamed?: boolean
   /** Versioned conversation mode; older metadata defaults to agent. */
   mode?: 'agent' | 'life'
+  /** 累计消耗 token（usage_update / session_loaded 写回，侧边栏展示）。 */
+  totalTokens?: number
 }
 
 export interface SessionGroup {
@@ -254,6 +256,16 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   function find(id: string): SessionMeta | undefined {
     return metas.value.find(m => m.id === id)
+  }
+
+  /** 记录会话累计消耗 token（引擎 usage_update / session_loaded 权威值）。只在值更大时覆盖，避免旧数据回退。 */
+  function updateTokens(id: string, total: number) {
+    const meta = find(id)
+    if (!meta) return
+    if (Number.isFinite(total) && (meta.totalTokens ?? 0) < total) {
+      meta.totalTokens = total
+      persistMeta()
+    }
   }
 
   function setModel(id: string, providerId: string, model: string) {
@@ -569,6 +581,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     metas, query, sorted, filtered, groups, currentCwd, setCurrentCwd,
     tasks, runningIds, taskConcurrencyLimit, refreshTasks, cancelTask, taskAction, taskDetail,
     syncFromEngine,
+    updateTokens,
     ensure, touch, setMode, setModel, rename, togglePin, remove, find, deriveTitle,
     saveTranscript, loadTranscript, migrateId, clearAll,
     refreshRunning, isRunning,

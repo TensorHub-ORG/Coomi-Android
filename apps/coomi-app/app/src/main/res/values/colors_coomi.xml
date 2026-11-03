@@ -110,4 +110,26 @@
     <color name="coomi_terminal_text_3">#999999</color>
     <color name="coomi_terminal_accent">#FFFFFF</color>
     <color name="coomi_terminal_accent_soft">#262626</color>
+    <!-- 终端主题 · 黑：近纯黑背景，琥珀橙强调色 -->
+    <color name="coomi_terminal_dark_bg">#0B0D0F</color>
+    <color name="coomi_terminal_dark_page">#07090A</color>
+    <color name="coomi_terminal_dark_card">#0B0D0F</color>
+    <color name="coomi_terminal_dark_fill">#12161A</color>
+    <color name="coomi_terminal_dark_border">#232A31</color>
+    <color name="coomi_terminal_dark_text">#E8EDF2</color>
+    <color name="coomi_terminal_dark_text_2">#9FB0BE</color>
+    <color name="coomi_terminal_dark_text_3">#64757F</color>
+    <color name="coomi_terminal_dark_accent">#FF9D3D</color>
+    <color name="coomi_terminal_dark_accent_soft">#2A1D10</color>
+    <!-- 终端主题 · 白：白底黑字，无彩色点缀 -->
+    <color name="coomi_terminal_light_bg">#FFFFFF</color>
+    <color name="coomi_terminal_light_page">#F2F2F2</color>
+    <color name="coomi_terminal_light_card">#FFFFFF</color>
+    <color name="coomi_terminal_light_fill">#F5F5F5</color>
+    <color name="coomi_terminal_light_border">#DCDCDC</color>
+    <color name="coomi_terminal_light_text">#000000</color>
+    <color name="coomi_terminal_light_text_2">#1A1A1A</color>
+    <color name="coomi_terminal_light_text_3">#5A5A5A</color>
+    <color name="coomi_terminal_light_accent">#000000</color>
+    <color name="coomi_terminal_light_accent_soft">#ECECEC</color>
 </resources>

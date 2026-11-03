@@ -24,14 +24,15 @@ const session = useSessionStore()
 const config = useConfigStore()
 const router = useRouter()
 
-/** 斜杠指令：点击后填入输入框，可编辑后发送。 */
+/** 斜杠指令：点击后先确认，再按命令类型执行或填入输入框。 */
 const SLASH_COMMANDS = [
   { name: '/loop', desc: '循环执行直到完成' },
   { name: '/plan', desc: '进入计划模式' },
   { name: '/mcp', desc: '管理 MCP 服务器' },
   { name: '/skills', desc: '查看可用技能' },
-  { name: '/memory', desc: '查看 Coomi 内建持久记忆' },
-  { name: '/compact', desc: '立即压缩当前上下文' },
+  { name: '/memory', desc: '查看持久记忆（不含记忆库）' },
+  { name: '/workflows', desc: '打开持久化工作流' },
+  { name: '/compact', desc: '压缩当前上下文（需确认）' },
 ]
 
 const text = ref('')
@@ -173,7 +174,7 @@ function onKeydown(e: KeyboardEvent) {
 
 const modeNotice = ref('')
 // 推理强度粒子数量（1.4.8 的 effort 特效，档位越高粒子越多）。
-const EFFORT_PARTICLES = { auto: 3, low: 2, medium: 4, high: 6, xhigh: 8 } as const
+const EFFORT_PARTICLES = { off: 0, auto: 3, low: 2, medium: 4, high: 6, xhigh: 8 } as const
 let modeNoticeTimer: ReturnType<typeof setTimeout> | null = null
 function flashModeNotice(text: string) {
   modeNotice.value = text
@@ -213,6 +214,41 @@ async function insertSlash(cmd: string) {
   await nextTick()
   autoGrow()
   textarea.value?.focus()
+}
+
+/**
+ * 「指令」列表里的每条命令：点击即执行，执行前统一弹一次确认。
+ * 需要模型参与的命令把指令原文作为一轮请求发出，其余走本地动作（切模式 / 跳页面）。
+ */
+interface PendingCommand { name: string; desc: string; run: () => void | Promise<void> }
+const commandConfirm = ref<PendingCommand | null>(null)
+watch(commandConfirm, request => {
+  if (request) registerOverlay('composer-command', () => { commandConfirm.value = null })
+  else unregisterOverlay('composer-command')
+})
+
+const COMMAND_RUNNERS: Record<string, () => void | Promise<void>> = {
+  '/loop': () => { session.sendMessage('/loop') },
+  '/plan': () => { session.togglePlanMode() },
+  '/mcp': () => { void router.push('/catalog') },
+  '/skills': () => { void router.push('/catalog') },
+  '/memory': () => { session.sendMessage('/memory') },
+  '/workflows': () => { void router.push('/workflows') },
+  '/compact': () => { session.sendMessage('/compact') },
+}
+
+function requestCommand(cmd: { name: string; desc: string }) {
+  const run = COMMAND_RUNNERS[cmd.name]
+  if (!run) { void insertSlash(cmd.name); return }
+  quickOpen.value = false
+  commandConfirm.value = { name: cmd.name, desc: cmd.desc, run }
+}
+
+async function confirmCommand() {
+  const request = commandConfirm.value
+  commandConfirm.value = null
+  if (!request) return
+  try { await request.run() } catch { /* 动作自身会给出提示 */ }
 }
 
 function toggleQuick() { quickOpen.value = !quickOpen.value }
@@ -475,9 +511,28 @@ watch(attachments, () => {
         <button class="qchip file" @click="authorizeFolder"><CoomiIcon name="folder" :size="15" />授权目录</button>
       </div>
       <div class="slash-list">
-        <button v-for="c in SLASH_COMMANDS" :key="c.name" class="slash-item" @click="insertSlash(c.name)">
+        <button v-for="c in SLASH_COMMANDS" :key="c.name" class="slash-item" @click="requestCommand(c)">
           <code>{{ c.name }}</code><span>{{ c.desc }}</span>
         </button>
+      </div>
+    </div>
+
+    <!-- 指令执行确认浮层 -->
+    <div v-if="commandConfirm" class="risk-mask" @click.self="commandConfirm = null">
+      <div class="risk-dialog" role="alertdialog" aria-modal="true" aria-label="确认执行指令">
+        <p class="cmd-title">执行 {{ commandConfirm.name }}？</p>
+        <p class="risk-text">
+          {{ commandConfirm.desc }}
+          <template v-if="commandConfirm.name === '/compact'">会保留当前工作方向并压缩旧消息；这个操作会调用模型，完成后不能直接恢复原始上下文。</template>
+          <template v-else-if="commandConfirm.name === '/memory'">会在本会话里输出持久记忆清单，不会改动任何记忆内容。</template>
+          <template v-else-if="commandConfirm.name === '/loop'">会把该指令作为一轮请求发给模型。</template>
+          <template v-else-if="commandConfirm.name === '/plan'">会切换计划模式：打开后先给方案，确认了再动手。</template>
+          <template v-else>会打开对应页面，当前会话保持不动。</template>
+        </p>
+        <div class="risk-actions">
+          <button class="btn ghost" @click="commandConfirm = null">取消</button>
+          <button class="btn primary" @click="confirmCommand">确认执行</button>
+        </div>
       </div>
     </div>
 
@@ -638,6 +693,8 @@ watch(attachments, () => {
 .risk-actions .btn { min-height: 36px; padding: 0 14px; border-radius: 8px; font-size: 13px; }
 .risk-actions .btn.ghost { background: var(--fill); color: var(--text-2); }
 .risk-actions .btn.danger { background: var(--danger); color: #fff; }
+.risk-actions .btn.primary { background: var(--blue); color: #fff; }
+.cmd-title { margin: 0; font-size: 15px; font-weight: 750; color: var(--text); }
 .mode-notice {
   position:fixed;left:20px;right:20px;bottom:clamp(150px,28dvh,280px);z-index:95;
   max-width:360px;margin:0 auto;padding:15px 16px;border:1px solid var(--blue-border);

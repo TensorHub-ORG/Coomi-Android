@@ -29,6 +29,6 @@ function toggle() { manual.value = true; open.value = !open.value }
 .count { flex:1; font-size:11.5px; }
 .chev { transition:transform .18s; }
 .chev.open { transform:rotate(90deg); }
-.body { margin:4px 0 0 6px; padding:9px 13px; border-left:2px solid var(--blue-border); border-radius:0 var(--r-sm) var(--r-sm) 0; background:var(--fill); font-size:13px; line-height:1.7; color:var(--text-2); white-space:pre-wrap; overflow-wrap:anywhere; }
+.body { margin:4px 0 0 6px; padding:9px 13px; border-left:2px solid var(--blue-border); border-radius:0 var(--r-sm) var(--r-sm) 0; background:var(--fill); font-size:13px; line-height:1.7; color:var(--term-think); white-space:pre-wrap; overflow-wrap:anywhere; }
 .preview { max-height:calc(3.5 * 1.7 * 13px + 18px); overflow:hidden; mask-image:linear-gradient(transparent,#000 28%); }
 </style>

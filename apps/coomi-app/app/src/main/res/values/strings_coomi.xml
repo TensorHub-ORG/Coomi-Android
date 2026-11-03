@@ -279,4 +279,8 @@
     <string name="coomi_privacy_policy_title">用户隐私政策</string>
     <string name="coomi_privacy_policy_body">对话、文件和密钥默认保存在您的设备。模型请求会发送给您配置的服务商。匿名日活仅按 IP 每日去重，不上传对话或文件；错误反馈仅在您确认后上传脱敏诊断。</string>
     <string name="coomi_dash_theme_terminal">黑白终端</string>
+    <string name="coomi_dash_theme_terminal_dark">终端 · 黑</string>
+    <string name="coomi_dash_theme_terminal_light">终端 · 白</string>
+    <string name="coomi_appearance_terminal_dark_desc">全等宽字体；思考过程白色，输出与工具调用橙色</string>
+    <string name="coomi_appearance_terminal_light_desc">全等宽字体；一律黑字，无彩色点缀</string>
 </resources>

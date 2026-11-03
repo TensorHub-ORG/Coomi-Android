@@ -215,6 +215,105 @@ async function loadInstalled() {
   }
 }
 
+// ── MCP Server 可视化配置：列表 / 新建 / 编辑 / 测试 ──
+interface McpServerRow {
+  name: string; transport: string; enabled: boolean; target: string
+  config: Record<string, unknown>; tools_count: number; error?: string | null
+}
+const serverRows = ref<McpServerRow[]>([])
+const serverEditor = ref<{ name: string; editing: boolean; text: string; result: string; busy: boolean } | null>(null)
+
+async function loadServers() {
+  try {
+    const res = await authedFetch('/api/mcp/servers')
+    const data = await parseRes(res)
+    serverRows.value = data.servers ?? []
+  } catch {
+    // 旧引擎没有该接口时静默降级：保留目录安装流程。
+    serverRows.value = []
+  }
+}
+
+function openServerEditor(row?: McpServerRow) {
+  serverEditor.value = row
+    ? { name: row.name, editing: true, text: JSON.stringify(row.config ?? {}, null, 2), result: '', busy: false }
+    : {
+        name: '',
+        editing: false,
+        text: JSON.stringify({ transport: 'stdio', command: '', args: [], env: {} }, null, 2),
+        result: '',
+        busy: false,
+      }
+}
+
+function parseServerJson(): Record<string, unknown> | null {
+  const editor = serverEditor.value
+  if (!editor) return null
+  try {
+    const value = JSON.parse(editor.text)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('配置必须是 JSON 对象')
+    return value as Record<string, unknown>
+  } catch (e) {
+    editor.result = `JSON 解析失败：${e instanceof Error ? e.message : String(e)}`
+    return null
+  }
+}
+
+async function saveServer() {
+  const editor = serverEditor.value
+  if (!editor) return
+  const config = parseServerJson()
+  if (!config) return
+  const name = editor.name.trim()
+  if (!name) { editor.result = '请填写名称'; return }
+  editor.busy = true
+  editor.result = ''
+  try {
+    const res = await authedFetch(
+      editor.editing ? `/api/mcp/servers/${encodeURIComponent(name)}` : '/api/mcp/servers',
+      {
+        method: editor.editing ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, config }),
+      },
+    )
+    await parseRes(res)
+    serverEditor.value = null
+    notice.value = `已保存 MCP「${name}」，新开会话后生效`
+    await Promise.all([load(), loadInstalled(), loadServers()])
+  } catch (e) {
+    editor.result = `保存失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    editor.busy = false
+  }
+}
+
+async function testServer() {
+  const editor = serverEditor.value
+  if (!editor) return
+  const config = parseServerJson()
+  if (!config) return
+  const name = editor.name.trim() || 'test'
+  editor.busy = true
+  editor.result = '正在连接…'
+  try {
+    const res = await authedFetch(`/api/mcp/servers/${encodeURIComponent(name)}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config }),
+    })
+    const data = await parseRes(res)
+    const status = data.status ?? {}
+    editor.result = status.error
+      ? `连接失败：${status.error}`
+      : `连接成功，发现 ${status.tools_count ?? 0} 个工具`
+  } catch (e) {
+    editor.result = `测试失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    editor.busy = false
+  }
+}
+
 /** 加载社区市场（/api/registry）：引擎代理拉取注册表 + 热度统计，带 10 分钟缓存。 */
 async function loadMarket() {
   marketLoading.value = true
@@ -249,7 +348,7 @@ function switchScope(next: Scope) {
   if (scope.value === next) return
   scope.value = next
   error.value = ''
-  if (next === 'installed') void loadInstalled()
+  if (next === 'installed') { void loadInstalled(); void loadServers() }
   if (next === 'market') void loadMarket()
 }
 
@@ -363,7 +462,7 @@ async function installSkill(item: SkillItem) {
   }
 }
 
-onMounted(load)
+onMounted(() => { void load(); void loadServers() })
 // 从控制台进入：返回统一回控制台（浏览器环境回聊天主页）
 const importError = ref('')
 const customMcp = ref(false)
@@ -495,6 +594,10 @@ function goDashboard() { goBack(router, 'dashboard') }
 
       <!-- MCP（市场视图在下方独立渲染） -->
       <template v-if="tab === 'mcp' && scope !== 'market'">
+        <div v-if="scope === 'installed'" class="server-bar">
+          <button class="act" @click="openServerEditor()">＋ 新建 MCP Server</button>
+          <span class="hint">直接编辑 config/mcp_servers.json；env / headers 的值保存后只显示掩码。</span>
+        </div>
         <p v-if="!loading && visibleMcp.length === 0" class="hint">
           {{ scope === 'installed' ? '本机还没有已安装的 MCP Server。' : '目录为空，暂时没有可安装的 MCP Server。' }}
         </p>
@@ -517,6 +620,9 @@ function goDashboard() { goBack(router, 'dashboard') }
               <span v-if="item.path" class="cmeta path"><CoomiIcon name="folder" :size="12" />{{ item.path }}</span>
               <div class="dops">
                 <template v-if="item.installed">
+                  <button v-if="serverRows.some(r => r.name === item.name)" class="act" :disabled="busy !== null" @click.stop="openServerEditor(serverRows.find(r => r.name === item.name))">
+                    编辑配置
+                  </button>
                   <button class="act" :disabled="busy !== null" @click.stop="setEnabled('mcp', item, !item.enabled)">
                     {{ item.enabled ? '停用' : '启用' }}
                   </button>
@@ -649,6 +755,32 @@ function goDashboard() { goBack(router, 'dashboard') }
       </template>
 
       </template>
+      <!-- MCP Server 配置编辑（新建 / 编辑 / 测试） -->
+      <div v-if="serverEditor" class="sheet-mask" @click.self="serverEditor = null">
+        <div class="sheet">
+          <div class="grip" />
+          <div class="stitle">
+            <CoomiIcon name="plug" :size="17" />
+            {{ serverEditor.editing ? '编辑' : '新建' }} MCP Server
+          </div>
+          <label class="editor-field">
+            <span>名称</span>
+            <input v-model="serverEditor.name" class="form-input" :disabled="serverEditor.editing" placeholder="server-name" autocomplete="off" />
+          </label>
+          <label class="editor-field">
+            <span>配置 JSON</span>
+            <textarea v-model="serverEditor.text" class="form-input mono" rows="10" spellcheck="false" />
+          </label>
+          <p class="sdesc">支持 stdio（command / args / env / cwd）与 http / sse（url / headers）。env、headers 的值保存后只显示掩码；留空表示保持原值。</p>
+          <p v-if="serverEditor.result" class="notice" :class="{ err: /失败|错误|解析/.test(serverEditor.result) }">{{ serverEditor.result }}</p>
+          <div class="sheet-actions">
+            <button class="btn ghost" @click="serverEditor = null">取消</button>
+            <button class="btn" :disabled="serverEditor.busy" @click="testServer">测试连接</button>
+            <button class="btn primary" :disabled="serverEditor.busy" @click="saveServer">保存</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 彻底删除确认（管理页卸载 = 停用可恢复，删除 = 彻底删除） -->
       <div v-if="askDelete" class="sheet-mask" @click.self="askDelete = null">
         <div class="sheet">
@@ -757,6 +889,11 @@ function goDashboard() { goBack(router, 'dashboard') }
 .form-actions .btn { min-height: 34px; padding: 0 14px; border-radius: 8px; font-size: 13px; }
 .form-actions .btn.primary { background: var(--blue); color: #fff; }
 .form-actions .btn.ghost { background: var(--fill); color: var(--text-2); }
+.server-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.server-bar .hint { margin: 0; font-size: 11.5px; }
+.editor-field { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.editor-field > span { font-size: 12px; font-weight: 650; color: var(--text-2); }
+.editor-field textarea.form-input { resize: vertical; min-height: 120px; line-height: 1.5; }
 .market-search {
   display: flex; align-items: center; gap: 8px;
   height: 42px; margin: -2px 0 12px; padding: 0 12px;

@@ -713,15 +713,7 @@
             <div data-channel-panel="stable">
 <h2 class="changelog-title">v1.4.9-fix.6 更新说明【稳定】</h2>
 <p class="changelog-sub">2026-10-09 发布</p>
-<ul class="changelog-list">
-<li>拓展管理新增“联网”页签，支持配置、替换与移除 tavily（联网搜索）密钥，界面不回传已保存的明文密钥。</li>
-<li>搜索优先使用供应商原生 Web Search，其次使用配置的 Tavily，未配置时使用默认搜索。</li>
-<li>新增个人笔记本，每条笔记独立保存为 TXT 文件，支持多个笔记、标题搜索、全屏编辑、草稿恢复、版本冲突检查与删除确认。</li>
-<li>右上角扇形快捷工具将“任务”替换为“笔记”，控制台“会话与体验”在提示词库下新增笔记入口。</li>
-<li>“读取笔记”只将笔记名称和 ID 填入会话输入框，由用户发送后读取。笔记不自动注入 AI 上下文，也不作为持久记忆加载。</li>
-<li>修复会话快捷面板中的笔记全屏编辑与确认弹窗被误判为外部点击、导致面板自动关闭的问题。</li>
-<li>笔记入口统一使用笔记本图标，版本使用简化 Git 标志，用量使用仪表盘图标。</li>
-</ul>
+<ul class="changelog-list"><li>拓展管理新增“联网”页签，支持配置、替换与移除 tavily（联网搜索）密钥，界面不回传已保存的明文密钥。</li><li>搜索优先使用供应商原生 Web Search，其次使用配置的 Tavily，未配置时使用默认搜索。</li><li>新增个人笔记本，每条笔记独立保存为 TXT 文件，支持多个笔记、标题搜索、全屏编辑、草稿恢复、版本冲突检查与删除确认。</li><li>右上角扇形快捷工具将“任务”替换为“笔记”，控制台“会话与体验”在提示词库下新增笔记入口。</li><li>“读取笔记”只将笔记名称和 ID 填入会话输入框，由用户发送后读取。笔记不自动注入 AI 上下文，也不作为持久记忆加载。</li><li>修复会话快捷面板中的笔记全屏编辑与确认弹窗被误判为外部点击、导致面板自动关闭的问题。</li><li>笔记入口统一使用笔记本图标，版本使用简化 Git 标志，用量使用仪表盘图标。</li></ul>
 <details class="changelog-history">
 <summary>展开全部更新记录</summary>
 <div class="history-inner">
@@ -1649,6 +1641,34 @@ v1.5.1o2（Comax）合并说明【测试】
         }
       }
 
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, character => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[character]));
+      }
+
+      async function resolveReleaseNotes() {
+        try {
+          const response = await fetch("notes.json", { cache: "no-store" });
+          if (!response.ok) return;
+          const notes = await response.json();
+          const note = notes && notes.stable;
+          if (!note) return;
+          const panel = document.querySelector('[data-channel-panel="stable"]');
+          if (!panel) return;
+          const heading = panel.querySelector(":scope > h2.changelog-title");
+          const sub = panel.querySelector(":scope > p.changelog-sub");
+          const list = panel.querySelector(":scope > ul.changelog-list");
+          if (heading && note.version) heading.textContent = `v${note.version} 更新说明【稳定】`;
+          if (sub && note.date) sub.textContent = `${note.date} 发布`;
+          if (list && Array.isArray(note.items) && note.items.length) {
+            list.innerHTML = note.items.map(item => `<li>${escapeHtml(item)}</li>`).join("");
+          }
+        } catch (_) {
+          // notes.json 不可达时保留静态兜底文案。
+        }
+      }
+
       function recordDownload(platform) {
         const payload = JSON.stringify({ eventId: eventId("download"), platform });
         if (navigator.sendBeacon) {
@@ -1668,6 +1688,8 @@ v1.5.1o2（Comax）合并说明【测试】
       }));
       setPlatform("android");
       resolveLatestRelease("android");
+      // 更新说明改为外部文件驱动：notes.json 是唯一来源，静态区块作为断网兜底。
+      resolveReleaseNotes();
       // 历史版本安装包下载（正式/测试通道）
       (async () => {
         for (const [channel, dir] of [["android", "https://updates.septemc.com/coomi/android"], ["android_test", "https://updates.septemc.com/coomi/android_test"]]) {

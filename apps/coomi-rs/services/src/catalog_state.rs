@@ -196,6 +196,60 @@ pub fn remove_configured_mcp(home: &Path, name: &str) -> Result<()> {
     })
 }
 
+/// 读取单个 MCP server 的原始配置（未掩码）。
+pub fn get_mcp_config(home: &Path, name: &str) -> Result<Option<Value>> {
+    let path = home.join("config").join("mcp_servers.json");
+    let document = read_json_or_default(&path, json!({"version": 1, "servers": {}}))?;
+    let servers = document
+        .get("servers")
+        .and_then(Value::as_object)
+        .context("mcp_servers.json has no servers object")?;
+    Ok(servers.get(name).cloned())
+}
+
+/// 添加或更新 MCP server 配置（原子写）。返回 true 表示新建，false 表示覆盖已有。
+pub fn upsert_mcp_config(home: &Path, name: &str, config: &Value) -> Result<bool> {
+    validate_name(name)?;
+    anyhow::ensure!(config.is_object(), "MCP config must be an object");
+    let transport = config
+        .get("transport")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if config.get("command").is_some() {
+                "stdio"
+            } else {
+                "http"
+            }
+        });
+    anyhow::ensure!(
+        matches!(transport, "stdio" | "http" | "sse"),
+        "unsupported MCP transport"
+    );
+    if transport == "stdio" {
+        anyhow::ensure!(
+            config
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty()),
+            "stdio MCP command is required"
+        );
+    } else {
+        anyhow::ensure!(
+            config.get("url").and_then(Value::as_str).is_some_and(|value| {
+                value.starts_with("http://") || value.starts_with("https://")
+            }),
+            "remote MCP URL must use http or https"
+        );
+    }
+    let existed = std::cell::Cell::new(false);
+    update_mcp_document(home, |servers| {
+        existed.set(servers.contains_key(name));
+        servers.insert(name.to_owned(), config.clone());
+        Ok(())
+    })?;
+    Ok(!existed.get())
+}
+
 fn update_mcp_document(
     home: &Path,
     update: impl FnOnce(&mut serde_json::Map<String, Value>) -> Result<()>,
@@ -213,6 +267,9 @@ fn update_mcp_document(
 fn validate_name(name: &str) -> Result<()> {
     anyhow::ensure!(
         !name.is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | '.'))
             && Path::new(name).components().count() == 1
             && !matches!(name, "." | ".."),
         "name must be one directory component"
@@ -233,7 +290,15 @@ fn save_json(path: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, serde_json::to_vec_pretty(value)?)
+    // 先写临时文件再替换，避免写到一半被打断留下半截 JSON。
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec_pretty(value)?)
+        .with_context(|| format!("failed to write configuration {}", temporary.display()))?;
+    #[cfg(windows)]
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+    fs::rename(&temporary, path)
         .with_context(|| format!("failed to save configuration {}", path.display()))
 }
 
@@ -266,5 +331,38 @@ mod tests {
         assert!(!list_configured_mcp(home.path()).expect("list")[0].enabled);
         remove_configured_mcp(home.path(), "docs").expect("remove");
         assert!(list_configured_mcp(home.path()).expect("list").is_empty());
+    }
+
+    #[test]
+    fn upserts_and_reads_mcp_config() {
+        let home = tempfile::tempdir().expect("temporary home");
+        let config = json!({
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "server"],
+            "env": {"TOKEN": "secret"}
+        });
+        assert!(upsert_mcp_config(home.path(), "demo", &config).expect("create"));
+        assert!(!upsert_mcp_config(home.path(), "demo", &config).expect("update"));
+        let stored = get_mcp_config(home.path(), "demo").expect("read").expect("present");
+        assert_eq!(stored["command"], "npx");
+        assert_eq!(stored["env"]["TOKEN"], "secret");
+
+        // 名称必须能安全落盘；远端 transport 只接受 http(s)。
+        assert!(upsert_mcp_config(home.path(), "../escape", &config).is_err());
+        assert!(upsert_mcp_config(
+            home.path(),
+            "remote",
+            &json!({"transport": "http", "url": "ftp://example.test"})
+        )
+        .is_err());
+
+        // 省略 transport 时按 command / url 推断。
+        assert!(upsert_mcp_config(
+            home.path(),
+            "inferred",
+            &json!({"command": "node", "args": ["server.js"]})
+        )
+        .is_ok());
     }
 }

@@ -106,6 +106,12 @@ function go(path: string) {
   emit('close')
   nextTick(() => router.push(path))
 }
+/** 会话累计 token 显示：1.2k / 3.4M。 */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
+  return String(n)
+}
 function openDashboard() {
   emit('close')
   if (window.CoomiAndroid?.openDashboard) window.CoomiAndroid.openDashboard()
@@ -193,6 +199,9 @@ function openDashboard() {
                 <span>{{ formatSessionTime(m.updatedAt) }}</span>
                 <template v-if="m.turns">
                   <span>·</span><span>{{ m.turns }} 轮</span>
+                </template>
+                <template v-if="m.totalTokens">
+                  <span>·</span><span class="token-count">{{ formatTokens(m.totalTokens) }} tokens</span>
                 </template>
                 <span v-if="sessions.isRunning(m.id)" class="rspin" aria-label="后台运行中" />
               </p>
@@ -408,4 +417,5 @@ function openDashboard() {
   border: 0; border-radius: var(--r-md); background: var(--fill);
   font-size: 15.5px; font-weight: 600; color: var(--text-2);
 }
+.token-count { color: var(--blue); font-variant-numeric: tabular-nums; }
 </style>

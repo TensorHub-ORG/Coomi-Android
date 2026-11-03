@@ -154,27 +154,42 @@ pub fn normalize_history(messages: &[ChatMessage]) -> Vec<ChatMessage> {
         }
     }
 
-    let output_ids = messages
-        .iter()
-        .filter(|message| message.role == Role::Tool)
-        .filter_map(|message| message.tool_call_id.clone())
-        .collect::<HashSet<_>>();
+    // 工具结果按 call id 建索引，统一在发起它的 assistant 轮次之后立即输出。
+    // 同一 call id 的重复结果只保留第一条；孤儿结果在下面被丢弃。
+    let mut tool_results = std::collections::HashMap::new();
+    for message in messages {
+        if message.role != Role::Tool {
+            continue;
+        }
+        let Some(id) = message.tool_call_id.as_ref() else {
+            continue;
+        };
+        if known_calls.contains(id) {
+            tool_results.entry(id.clone()).or_insert(message);
+        }
+    }
+
+    let mut emitted = HashSet::new();
     let mut output = Vec::with_capacity(messages.len());
     for message in messages {
-        if message.role == Role::Tool
-            && message
-                .tool_call_id
-                .as_ref()
-                .is_none_or(|id| !known_calls.contains(id))
-        {
+        // 工具结果跟随 assistant 输出；这里跳过原文位置（孤儿自然被跳过）。
+        if message.role == Role::Tool {
             continue;
         }
         output.push(message.clone());
-        if message.role == Role::Assistant {
-            for call in &message.tool_calls {
-                if !output_ids.contains(&call.id) {
-                    output.push(ChatMessage::tool(&call.id, "error: interrupted before a durable result was recorded; this operation may already have taken effect. Verify its state with read-only tools before retrying any mutation."));
-                }
+        if message.role != Role::Assistant {
+            continue;
+        }
+        // 上游要求 tool 消息紧邻发起它的 assistant；把中间的 internal user
+        // 等消息自动延后到工具组之后。
+        for call in &message.tool_calls {
+            if !emitted.insert(call.id.clone()) {
+                continue;
+            }
+            if let Some(result) = tool_results.get(&call.id) {
+                output.push((*result).clone());
+            } else {
+                output.push(ChatMessage::tool(&call.id, "error: interrupted before a durable result was recorded; this operation may already have taken effect. Verify its state with read-only tools before retrying any mutation."));
             }
         }
     }
@@ -360,6 +375,35 @@ mod tests {
         assert_eq!(normalized.len(), 2);
         assert_eq!(normalized[1].tool_call_id.as_deref(), Some("one"));
         assert!(normalized[1].content.contains("may already have taken effect"));
+    }
+
+    #[test]
+    fn normalization_keeps_tool_results_next_to_the_assistant_turn() {
+        let mut note = ChatMessage::user("internal note");
+        note.internal = true;
+        let messages = vec![
+            ChatMessage::assistant(
+                "",
+                vec![
+                    ToolCall { id: "a".into(), name: "read_file".into(), arguments: json!({}) },
+                    ToolCall { id: "b".into(), name: "read_file".into(), arguments: json!({}) },
+                ],
+            ),
+            note,
+            ChatMessage::tool("b", "B"),
+            ChatMessage::tool("a", "A"),
+            ChatMessage::tool("a", "duplicate A"),
+            ChatMessage::tool("orphan", "ignored"),
+        ];
+        let normalized = normalize_history(&messages);
+        // assistant → 工具结果按调用顺序 → 被延后的 internal user；重复/孤儿结果丢弃。
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(normalized[1].tool_call_id.as_deref(), Some("a"));
+        assert_eq!(normalized[1].content, "A");
+        assert_eq!(normalized[2].tool_call_id.as_deref(), Some("b"));
+        assert_eq!(normalized[2].content, "B");
+        assert!(normalized[3].internal);
+        assert_eq!(normalized[3].content, "internal note");
     }
 
     #[test]

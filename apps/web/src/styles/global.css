@@ -28,6 +28,10 @@
   --text: #1b1e23;
   --text-2: #5c6270;
   --text-3: #9096a2;
+  /* 终端主题的三个文字角色；非终端主题等同于常规正文/次要文字。 */
+  --term-think: var(--text-2);
+  --term-output: var(--text);
+  --term-tool: var(--text-2);
 
   /* ── 语义 ── */
   --ok: #1f9d6b;
@@ -384,7 +388,7 @@ h1, h2, h3 { margin: 0; font-weight: 650; }
 @keyframes card-tracer-orbit { to { stroke-dashoffset:-100; } }
 
 /* ── Markdown 正文 ── */
-.md { font-size: 15.5px; line-height: 1.72; word-break: break-word; }
+.md { font-size: 15.5px; line-height: 1.72; word-break: break-word; color: var(--term-output); }
 .md :first-child { margin-top: 0; }
 .md :last-child { margin-bottom: 0; }
 .md p { margin: 0.55em 0; }
@@ -428,15 +432,42 @@ h1, h2, h3 { margin: 0; font-weight: 650; }
 .minimal-ui .tool-body { font-size: 10px; }
 .minimal-ui .card-out { font-size: 12.4px; }
 
-/* Black-and-white terminal preset. Custom appearance tokens retain priority. */
-:root[data-theme="terminal"]:not([data-custom-appearance="true"]) {
-  --bg:#000; --page:#000; --fill:#181818; --fill-strong:#242424; --fill-press:#333;
-  --border:#363636; --border-strong:#555; --text:#f5f5f5; --text-2:#cacaca; --text-3:#999;
-  --blue:#fff; --blue-press:#ddd; --blue-soft:#262626; --blue-soft-2:#333; --blue-border:#777;
-  --code-bg:#121212; --code-text:#eee; --code-bg-dark:#080808; --bg-card:#0a0a0a;
-  --bg-elevated:#111; --user-bubble:#eee; --user-text:#000; --font-ui:var(--font-mono);
+/* Terminal presets: all-monospace, square corners, no shadows.
+   Dark: thinking white, output/tool calls amber. Light: everything black.
+   Custom appearance tokens retain priority. */
+:root[data-theme="terminal-dark"]:not([data-custom-appearance="true"]),
+:root[data-theme="terminal-light"]:not([data-custom-appearance="true"]) {
+  --r-card:6px; --r-md:5px; --r-sm:4px;
+  --shadow-1:none; --shadow-2:none; --shadow-sheet:none; --shadow-drawer:none;
+  --font-ui:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono","DejaVu Sans Mono",monospace;
+  letter-spacing:.01em;
 }
-:root[data-theme="terminal"]:not([data-custom-appearance="true"]) :is(.primary, .send, .channel-tabs button.selected) { color:#000; }
+:root[data-theme="terminal-dark"]:not([data-custom-appearance="true"]) {
+  --bg:#0b0d0f; --page:#07090a; --fill:#12161a; --fill-strong:#1a1f25; --fill-press:#232a31;
+  --border:#232a31; --border-strong:#313a43; --text:#e8edf2; --text-2:#9fb0be; --text-3:#64757f;
+  --blue:#ff9d3d; --blue-press:#e8871f; --blue-soft:#2a1d10; --blue-soft-2:#3a2814; --blue-border:#6b4718;
+  --orange:#ff9d3d; --orange-soft:#2a1d10; --orange-border:#6b4718;
+  --ok:#4ee39a; --ok-soft:#10281d; --warn:#ffd166; --warn-soft:#2a2413;
+  --danger:#ff6b6b; --danger-soft:#2c1517; --danger-border:#6b2b2b;
+  --code-bg:#12161a; --code-text:#cfe3f0; --code-bg-dark:#07090a; --bg-card:#0b0d0f;
+  --bg-input:#12161a; --bg-elevated:#12161a; --user-bubble:#1a1f25; --user-text:#e8edf2;
+  --term-think:#fff; --term-output:#ff9d3d; --term-tool:#ff9d3d;
+}
+:root[data-theme="terminal-light"]:not([data-custom-appearance="true"]) {
+  --bg:#fff; --page:#f2f2f2; --fill:#f5f5f5; --fill-strong:#ebebeb; --fill-press:#e0e0e0;
+  --border:#dcdcdc; --border-strong:#c4c4c4; --text:#000; --text-2:#1a1a1a; --text-3:#5a5a5a;
+  --blue:#000; --blue-press:#333; --blue-soft:#ececec; --blue-soft-2:#e0e0e0; --blue-border:#bdbdbd;
+  --orange:#000; --orange-soft:#ececec; --orange-border:#bdbdbd;
+  --ok:#1a6b3c; --ok-soft:#e8f2ec; --warn:#7a5a00; --warn-soft:#f7f2e0;
+  --danger:#b3261e; --danger-soft:#fbeae8; --danger-border:#e0b4b0;
+  --code-bg:#f5f5f5; --code-text:#000; --code-bg-dark:#ebebeb; --bg-card:#fff;
+  --bg-input:#f5f5f5; --bg-elevated:#fff; --user-bubble:#ebebeb; --user-text:#000;
+  --term-think:#000; --term-output:#000; --term-tool:#000;
+}
+:root[data-theme="terminal-dark"]:not([data-custom-appearance="true"]) :is(.primary, .send, .channel-tabs button.selected),
+:root[data-theme="terminal-light"]:not([data-custom-appearance="true"]) :is(.primary, .send, .channel-tabs button.selected) { color:#000; }
+:root[data-theme="terminal-dark"]:not([data-custom-appearance="true"]) :is(.gtitle, .mini-tool, .tool .verb),
+:root[data-theme="terminal-light"]:not([data-custom-appearance="true"]) :is(.gtitle, .mini-tool, .tool .verb) { color:var(--term-tool); }
 @media (prefers-reduced-motion:reduce) {
   *, *::before, *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
 }

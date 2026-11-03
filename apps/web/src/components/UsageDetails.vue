@@ -9,6 +9,14 @@ defineEmits<{ path: [] }>()
 const session = useSessionStore()
 const effortLabels = { auto: '自动', low: '低', medium: '中', high: '高', xhigh: '超高' } as const
 const categories = computed(() => contextSegments(session.usage?.contextUsed ?? 0, session.usage?.contextWindow ?? 0, session.usage?.contextCategories))
+const messageCount = computed(() => session.timeline.filter(item => item.kind === 'user' || item.kind === 'assistant').length)
+const toolCallCount = computed(() => session.timeline.filter(item => item.kind === 'tool').length)
+const mainOccupancy = computed(() => {
+  const used = session.usage?.contextUsed ?? 0
+  const top = [...categories.value].sort((a, b) => b.share - a.share)[0]
+  if (!top || top.share <= 0 || used <= 0) return '—'
+  return `${top.label} ${formatTokens(Math.round(top.share * used))}`
+})
 
 function formatTokens(value: number): string {
   if (value >= 1000000) return (value / 1000000).toFixed(1) + 'M'
@@ -29,6 +37,9 @@ function formatPercent(value: number | null | undefined): string {
         <div><span>本轮耗时</span><strong>{{ session.usage.turnElapsedMs > 0 ? formatDuration(session.usage.turnElapsedMs) : '--' }}</strong></div>
         <div><span>本轮输出 token</span><strong>{{ formatTokens(session.usage.turnOutputTokens) }}</strong></div>
         <div><span>上下文使用</span><strong>{{ formatTokens(session.usage.contextUsed) }} / {{ formatTokens(session.usage.contextWindow) }}</strong></div>
+        <div><span>消息数</span><strong>{{ messageCount }}</strong></div>
+        <div><span>主要占用</span><strong>{{ mainOccupancy }}</strong></div>
+        <div><span>工具累计</span><strong>{{ toolCallCount }} 次</strong></div>
         <div><span>本轮缓存命中</span><strong>{{ formatPercent(session.usage.turnCacheHitRate) }}</strong></div>
         <div><span>会话平均命中</span><strong>{{ formatPercent(session.usage.cacheHitRate) }}</strong></div>
       </div>
@@ -36,7 +47,7 @@ function formatPercent(value: number | null | undefined): string {
       <template v-if="session.usage">
         <p class="usage-subtitle">上下文构成（估算）</p>
         <div class="category-grid">
-          <div v-for="category in categories" :key="category.key"><span><i :style="{ background: category.color }" />{{ category.label }}</span><strong>{{ (category.share * 100).toFixed(1) }}%</strong></div>
+          <div v-for="category in categories" :key="category.key"><span><i :style="{ background: category.color }" />{{ category.label }}</span><strong>{{ (category.share * 100).toFixed(1) }}% · {{ formatTokens(Math.round(category.share * (session.usage.contextUsed ?? 0))) }}</strong></div>
         </div>
         <p class="usage-estimate">分类显示已用上下文的估算组成；环形按窗口容量绘制，灰色为剩余空间。会话累计用量单独统计。</p>
         <p class="usage-subtitle">各推理强度均轮统计</p>

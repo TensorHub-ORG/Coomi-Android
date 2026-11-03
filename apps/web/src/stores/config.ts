@@ -128,8 +128,8 @@ export const PERMISSION_MODES: { mode: PermissionMode; label: string; desc: stri
   { mode: 'minimal', label: '极简', desc: '只提供 shell 工具，适合纯命令行任务' },
 ]
 
-export type ThemeMode = 'system' | 'light' | 'dark' | 'book' | 'orange' | 'ink' | 'abyss' | 'ember' | 'celadon' | 'linen' | 'terminal'
-const THEME_VALUES: ThemeMode[] = ['system', 'light', 'dark', 'book', 'orange', 'ink', 'abyss', 'ember', 'celadon', 'linen', 'terminal']
+export type ThemeMode = 'system' | 'light' | 'dark' | 'book' | 'orange' | 'ink' | 'abyss' | 'ember' | 'celadon' | 'linen' | 'terminal-dark' | 'terminal-light'
+const THEME_VALUES: ThemeMode[] = ['system', 'light', 'dark', 'book', 'orange', 'ink', 'abyss', 'ember', 'celadon', 'linen', 'terminal-dark', 'terminal-light']
 export const THEME_MODES: { mode: ThemeMode; label: string; desc: string }[] = [
   { mode: 'system', label: '跟随系统', desc: '与手机系统深浅色保持一致' },
   { mode: 'light', label: '明亮模式', desc: '始终使用浅色界面' },
@@ -140,11 +140,13 @@ export const THEME_MODES: { mode: ThemeMode; label: string; desc: string }[] = [
   { mode: 'abyss', label: '深海', desc: '深海蓝黑底面与清冷青蓝点缀' },
   { mode: 'ember', label: '炭褐', desc: '炭黑褐底面与余烬铜色点缀' },
   { mode: 'celadon', label: '青瓷', desc: '青瓷浅灰底面与釉绿色点缀' },
-  { mode: 'terminal', label: '黑白终端', desc: '黑白界面与等宽字体' },
+  { mode: 'terminal-dark', label: '终端 · 黑', desc: '全等宽字体；思考过程白色，输出与工具调用橙色' },
+  { mode: 'terminal-light', label: '终端 · 白', desc: '全等宽字体；一律黑字，无彩色点缀' },
   { mode: 'linen', label: '亚麻', desc: '自然亚麻白底面与沉静靛色点缀' },
 ]
 
 export const REASONING_EFFORTS: { value: ReasoningEffort; label: string }[] = [
+  { value: 'off', label: '关闭' },
   { value: 'auto', label: '自动' },
   { value: 'low', label: '低' },
   { value: 'medium', label: '中' },
@@ -158,10 +160,13 @@ export function readThemeMode(): ThemeMode {
   if (bridge && typeof bridge.getThemeMode === 'function') {
     try {
       const v = String(bridge.getThemeMode() ?? '')
+      // 旧版单一 terminal 档位迁移到新的黑版终端。
+      if (v === 'terminal') return 'terminal-dark'
       if (THEME_VALUES.includes(v as ThemeMode)) return v as ThemeMode
     } catch { /* 桥未就绪时走 localStorage */ }
   }
   const saved = localStorage.getItem('coomi.themeMode')
+  if (saved === 'terminal') return 'terminal-dark'
   return THEME_VALUES.includes(saved as ThemeMode) ? saved as ThemeMode : 'system'
 }
 
@@ -180,6 +185,11 @@ function readMottoFont(): MottoFont {
 
 /** 写入 <html data-theme>，前端 global.css 据此切换暗色主题。 */
 export function applyTheme(mode: ThemeMode) {
+  // 终端两版自带明确深浅色，不参与 system 的深浅色推断。
+  if (mode === 'terminal-dark' || mode === 'terminal-light') {
+    document.documentElement.setAttribute('data-theme', mode)
+    return
+  }
   const dark = mode === 'dark'
     || (mode === 'system' && window.matchMedia?.('(prefers-color-scheme: dark)').matches)
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : mode === 'system' ? 'light' : mode)

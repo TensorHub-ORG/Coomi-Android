@@ -16,7 +16,7 @@ import { useSessionsStore } from './sessions'
 import { isGlobalSession as isGlobalSessionId } from '@/bridge/life'
 import { router } from '@/router'
 import { pushStatus as publishControlStatus, pushTrace as publishTrace, setControlModeActive } from '@/bridge/controlFloat'
-import type { AssistantMessage, LoopProgress, QuestionCard, ReasoningBlock, RunState, Timelineitem, ToolCard, ToolDiagnosticTrace, UserMessage } from './viewModel'
+import type { AssistantMessage, LoopProgress, PlanProgress, QuestionCard, ReasoningBlock, RunState, Timelineitem, ToolCard, ToolDiagnosticTrace, UserMessage } from './viewModel'
 
 function defineSessionStore(storeId: string, auxiliary = false) {
   return defineStore(storeId, () => {
@@ -56,6 +56,8 @@ function defineSessionStore(storeId: string, auxiliary = false) {
   /** 当前会话的工作目录（会话标记路径，绑定为会话执行目录）。 */
   const cwd = ref('')
   const loop = ref<LoopProgress>({ active: false, currentStep: 0, totalSteps: 0, status: '' })
+  /** 计划进度由引擎 plan_updated 事件驱动（完整步骤列表），与持久化 loop 分离。 */
+  const plan = ref<PlanProgress>({ active: false, steps: [] })
   /** 生命体待投递问候（队列唯一 pending → 气泡/开场问候的数据源）。 */
   const lifeUnread = ref<LifeUnreadItem[]>([])
   const lifeUnreadName = ref('')
@@ -332,6 +334,14 @@ function defineSessionStore(storeId: string, auxiliary = false) {
         pushControlStatus('正在思考')
         queueFloatReasoning(ev.content)
         break
+      case 'plan_updated': {
+        plan.value = {
+          active: true,
+          steps: (ev.steps ?? []).map(s => ({ step: s.step, status: s.status })),
+          explanation: ev.explanation,
+        }
+        break
+      }
       case 'tool_start':
         connection.setRetry(null)
         endAssistantStream()
@@ -445,6 +455,9 @@ function defineSessionStore(storeId: string, auxiliary = false) {
           reasoningEfforts: ev.reasoning_efforts ?? previous?.reasoningEfforts ?? {},
           contextCategories: ev.context_categories ?? previous?.contextCategories ?? {},
         }
+        if (ev.usage.total_tokens != null) {
+          sessions.updateTokens(sessionId.value, ev.usage.total_tokens)
+        }
         break
       }
       case 'compression_started': pushNotice('info', ev.automatic ? '正在自动压缩上下文…' : '正在手动压缩上下文，完整历史将保留…'); break
@@ -497,6 +510,7 @@ function defineSessionStore(storeId: string, auxiliary = false) {
       }
       case 'turn_end':
         endAssistantStream(); cancelRunningTools(); connection.setRetry(null); runState.value = 'idle'
+        plan.value = { active: false, steps: [] }
         {
           const failures = turnToolTrace.filter(item => item.status === 'error').length
           if (maxConsecutiveToolFailures >= 3 && !failureNoticeCreated) {
@@ -540,6 +554,9 @@ function defineSessionStore(storeId: string, auxiliary = false) {
           turnOutputTokens: usage.value?.turnOutputTokens ?? 0,
           reasoningEfforts: usage.value?.reasoningEfforts ?? {},
           contextCategories: usage.value?.contextCategories ?? {},
+        }
+        if (u.total_tokens != null) {
+          sessions.updateTokens(sessionId.value, u.total_tokens)
         }
         if (typeof ev.cwd === 'string' && ev.cwd) cwd.value = ev.cwd
         break
@@ -752,6 +769,7 @@ function defineSessionStore(storeId: string, auxiliary = false) {
     flushPersistence()
     endAssistantStream(); timeline.value = []; usage.value = null
     loop.value = { active: false, currentStep: 0, totalSteps: 0, status: '' }; runState.value = 'idle'
+    plan.value = { active: false, steps: [] }
     pendingEdit.value = null
     undoConfirm.value = null
     activateSession(createSessionId())
@@ -795,6 +813,7 @@ function defineSessionStore(storeId: string, auxiliary = false) {
           retryConfirmation.value = null
           turnToolTrace = []; consecutiveToolFailures = 0; maxConsecutiveToolFailures = 0; failureNoticeCreated = false
           loop.value = { active: false, currentStep: 0, totalSteps: 0, status: '' }
+          plan.value = { active: false, steps: [] }
           const session = snapshot.session
           const messages = session.messages ?? []
           const archive = session.archive ?? []
@@ -916,6 +935,7 @@ function defineSessionStore(storeId: string, auxiliary = false) {
     endAssistantStream()
     usage.value = null
     loop.value = { active: false, currentStep: 0, totalSteps: 0, status: '' }
+    plan.value = { active: false, steps: [] }
     pendingEdit.value = null
     undoConfirm.value = null
     runState.value = 'idle'
@@ -938,6 +958,7 @@ function defineSessionStore(storeId: string, auxiliary = false) {
       // 避免 flushPersistence 把已删会话写回，也避免引擎在文件删除后重建同 id 会话。
       endAssistantStream(); timeline.value = []; usage.value = null
       loop.value = { active: false, currentStep: 0, totalSteps: 0, status: '' }; runState.value = 'idle'
+      plan.value = { active: false, steps: [] }
       activateSession(createSessionId())
       connect()
     }
@@ -1054,7 +1075,7 @@ function defineSessionStore(storeId: string, auxiliary = false) {
 
   function toggleLifeStats() { lifeStatsOpen.value = !lifeStatsOpen.value }
 
-  return { restoring, viewRevision, resumeFromBackground, sessionId, mode, timeline, runState, usage, retryConfirmation, cwd, loop, isBusy, pendingEdit, undoConfirm, lastUserMessage, lastAssistantMessage, pendingApproval, pendingQuestion, lifeUnread, lifeUnreadName, lifeStatsOpen, toggleLifeStats, lifeDelivering, isGlobalSession, resolveLifeMode, syncLifeMode, refreshLifeUnread, deliverLife, autoDeliverLifeIfReady, connect, reconnect, disconnect, flushPersistence, sendMessage, completeSendMorph, cancel, approve, answerQuestion, setPermissionMode, setReasoningEffort, setProductionMode, setMaxToolRounds, setSessionMode, togglePlanMode, selectModel, retryInterruptedTurn, dismissRetry, completeFileTransfer, newSession, openSession, deleteSession, setSessionCwd, startEditMessage, cancelEditMessage, requestUndo, confirmUndo, cancelUndo, undoTurn, sendGuide }
+  return { restoring, viewRevision, resumeFromBackground, sessionId, mode, timeline, runState, usage, plan, retryConfirmation, cwd, loop, isBusy, pendingEdit, undoConfirm, lastUserMessage, lastAssistantMessage, pendingApproval, pendingQuestion, lifeUnread, lifeUnreadName, lifeStatsOpen, toggleLifeStats, lifeDelivering, isGlobalSession, resolveLifeMode, syncLifeMode, refreshLifeUnread, deliverLife, autoDeliverLifeIfReady, connect, reconnect, disconnect, flushPersistence, sendMessage, completeSendMorph, cancel, approve, answerQuestion, setPermissionMode, setReasoningEffort, setProductionMode, setMaxToolRounds, setSessionMode, togglePlanMode, selectModel, retryInterruptedTurn, dismissRetry, completeFileTransfer, newSession, openSession, deleteSession, setSessionCwd, startEditMessage, cancelEditMessage, requestUndo, confirmUndo, cancelUndo, undoTurn, sendGuide }
   })
 }
 

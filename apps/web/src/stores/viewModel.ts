@@ -70,3 +70,7 @@ export interface LoopProgress {
   active: boolean; currentStep: number; totalSteps: number
   status: string; currentDescription?: string
 }
+
+/** 引擎 plan_updated 的完整步骤列表；与持久化 loop 分开。 */
+export interface PlanStep { step: string; status: 'pending' | 'in_progress' | 'completed' }
+export interface PlanProgress { active: boolean; steps: PlanStep[]; explanation?: string }

@@ -56,12 +56,14 @@ use coomi_services::CognitiveTurnContext;
 use coomi_services::EndpointResolver;
 use coomi_services::HttpModelProvider;
 use coomi_services::McpRuntime;
+use coomi_services::McpServerConfig;
 use coomi_services::MemoryManager;
 use coomi_services::MemoryScope;
 use coomi_services::MemoryType;
 use coomi_services::{ChatMember, GroupChatStore, GroupMessage, GroupRoom, MemberActivity};
 use coomi_services::{CollabArtifact, CollabRole, CollabStore, CollabTask};
 use coomi_services::ProviderDocument;
+use coomi_services::ProviderKind;
 use coomi_services::ProviderProtocol;
 use coomi_services::ProviderRegistry;
 use coomi_services::ProviderSettings;
@@ -188,6 +190,8 @@ struct AppState {
     registry_cache: Arc<StdMutex<Option<RegistryCache>>>,
     /// 工作流服务：cron 定时调度器（P1），API 层经它触发运行。
     workflow_scheduler: Arc<crate::workflow::WorkflowScheduler>,
+    /// 共享 MCP 运行时：管理接口的启停/测试/状态查询都读这一份。
+    mcp_runtime: Arc<McpRuntime>,
     /// AI 工作室工具确认：call_id -> 等待用户决定的通道。
     studio_approvals: Arc<StdMutex<HashMap<String, oneshot::Sender<bool>>>>,
     /// AI 工作室正在运行的任务；用于停止生成。
@@ -849,6 +853,12 @@ pub async fn serve(
     let restored_tasks = load_task_checkpoints(&home, &task_manager);
     let configured_task_limit = configured_connection_settings(&home).max_concurrent_tasks;
     let workflow_scheduler = crate::workflow::WorkflowScheduler::with_workspace(&home, &cwd);
+    // 启动时不阻塞在异常 MCP server 上：15 秒内没连上就先空运行时，后续重载。
+    let mcp_runtime = Arc::new(
+        tokio::time::timeout(Duration::from_secs(15), McpRuntime::load(&home))
+            .await
+            .unwrap_or_default(),
+    );
     let state = AppState {
         home,
         cwd,
@@ -861,6 +871,7 @@ pub async fn serve(
         vision_degraded: Arc::new(StdMutex::new(HashSet::new())),
         registry_cache: Arc::new(StdMutex::new(registry_cache)),
         workflow_scheduler,
+        mcp_runtime,
         studio_approvals: Arc::new(StdMutex::new(HashMap::new())),
         studio_runs: Arc::new(StdMutex::new(HashMap::new())),
         studio_events: Arc::new(StdMutex::new(HashMap::new())),
@@ -983,6 +994,15 @@ pub async fn serve(
         .route("/api/catalog/skills/install", post(install_skill_catalog))
         .route("/api/catalog/skills/import-zip", post(import_skill_zip))
         .route("/api/catalog/mcp/custom", post(import_mcp_custom))
+        .route("/api/mcp/servers", get(list_mcp_servers).post(create_mcp_server))
+        .route(
+            "/api/mcp/servers/{id}",
+            get(get_mcp_server)
+                .put(update_mcp_server)
+                .delete(delete_mcp_server),
+        )
+        .route("/api/mcp/servers/{id}/test", post(test_mcp_server))
+        .route("/api/model-capabilities", get(model_capabilities))
         .route(
             "/api/catalog/skills/install-remote",
             post(install_skill_remote),
@@ -1332,7 +1352,7 @@ fn configured_reasoning_effort(home: &Path) -> String {
     read_settings(home)
         .get("reasoning_effort")
         .and_then(Value::as_str)
-        .filter(|value| matches!(*value, "auto" | "low" | "medium" | "high" | "xhigh"))
+        .filter(|value| matches!(*value, "off" | "auto" | "low" | "medium" | "high" | "xhigh"))
         .unwrap_or("auto")
         .to_owned()
 }
@@ -3737,6 +3757,239 @@ async fn import_mcp_custom(
         .import_mcp_config(&name, &config)
         .map_err(|e| ApiError::bad_request(format!("{e:#}")))?;
     Ok(Json(json!({ "ok": true, "path": path.display().to_string() })))
+}
+
+#[derive(Deserialize)]
+struct ModelCapabilitiesQuery {
+    provider_id: String,
+    model: String,
+}
+
+/// 当前模型实际可用的推理档位；前端据此隐藏不支持的档位和「关闭」。
+async fn model_capabilities(
+    State(state): State<AppState>,
+    Query(query): Query<ModelCapabilitiesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let selector = format!("{}:{}", query.provider_id.trim(), query.model.trim());
+    let provider = ProviderRegistry::load(&providers_path(&state.home))
+        .map_err(ApiError::from)?
+        .resolve(Some(&selector))
+        .map_err(|error| ApiError::bad_request(format!("unknown model: {error:#}")))?;
+    let model = provider.model.to_ascii_lowercase();
+    let parameters = provider.model_parameters.get(&provider.model);
+    let has_explicit_field = parameters
+        .and_then(|value| value.get("reasoningField"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let mut efforts = Vec::new();
+    if let Some(mapping) = parameters
+        .and_then(|value| value.get("reasoningMapping"))
+        .and_then(Value::as_object)
+    {
+        for effort in ["low", "medium", "high", "xhigh"] {
+            if mapping.get(effort).is_some() {
+                efforts.push(effort);
+            }
+        }
+    }
+    let source = if !efforts.is_empty() || has_explicit_field {
+        "provider-config"
+    } else if model.contains("gpt-5") || model.starts_with('o') {
+        efforts = vec!["low", "medium", "high", "xhigh"];
+        "model-name"
+    } else if model.contains("reason")
+        || model.contains("thinking")
+        || model.contains("deepseek-r1")
+        || provider.kind == ProviderKind::DeepseekAccount
+    {
+        efforts = vec!["low", "medium", "high"];
+        "model-name"
+    } else {
+        "unknown"
+    };
+    let can_disable =
+        provider.kind != ProviderKind::DeepseekAccount || !model.contains("reasoner");
+    Ok(Json(json!({
+        "reasoning": {
+            "supported": !efforts.is_empty() || has_explicit_field,
+            "efforts": efforts,
+            "source": source,
+            "can_disable": can_disable,
+        }
+    })))
+}
+
+const MCP_SECRET_MASK: &str = "••••••";
+
+/// 返回给前端的配置副本：env/headers 的值一律掩码，避免密钥回显。
+fn mask_mcp_config(config: &Value) -> Value {
+    let mut masked = config.clone();
+    for key in ["env", "headers"] {
+        if let Some(map) = masked.get_mut(key).and_then(Value::as_object_mut) {
+            for value in map.values_mut() {
+                if value.as_str().is_some_and(|text| !text.is_empty()) {
+                    *value = Value::String(MCP_SECRET_MASK.into());
+                }
+            }
+        }
+    }
+    masked
+}
+
+/// 保存时把前端回传的掩码值还原成已保存的密钥；空值视为“保持原值”。
+fn merge_mcp_secrets(incoming: &mut Value, existing: &Value) {
+    for key in ["env", "headers"] {
+        let (Some(new_map), Some(old_map)) = (
+            incoming.get_mut(key).and_then(Value::as_object_mut),
+            existing.get(key).and_then(Value::as_object),
+        ) else {
+            continue;
+        };
+        for (name, value) in new_map.iter_mut() {
+            if value
+                .as_str()
+                .is_some_and(|text| text.is_empty() || text == MCP_SECRET_MASK)
+            {
+                *value = old_map
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| Value::String(String::new()));
+            }
+        }
+    }
+}
+
+fn configured_mcp_payload(state: &AppState) -> Result<Vec<Value>, ApiError> {
+    let configured = coomi_services::list_configured_mcp(&state.home)
+        .map_err(|error| ApiError::internal(format!("{error:#}")))?;
+    let statuses = state.mcp_runtime.statuses();
+    Ok(configured
+        .into_iter()
+        .map(|item| {
+            let config = coomi_services::get_mcp_config(&state.home, &item.name)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| json!({}));
+            let status = statuses.iter().find(|status| status.name == item.name);
+            json!({
+                "name": item.name,
+                "transport": item.transport,
+                "enabled": item.enabled,
+                "target": item.target,
+                "config": mask_mcp_config(&config),
+                "tools_count": status.map(|status| status.tools_count).unwrap_or(0),
+                "error": status.and_then(|status| status.error.clone()),
+            })
+        })
+        .collect())
+}
+
+async fn list_mcp_servers(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({ "servers": configured_mcp_payload(&state)? })))
+}
+
+#[derive(Deserialize)]
+struct McpServerRequest {
+    name: String,
+    #[serde(default)]
+    config: Value,
+}
+
+async fn create_mcp_server(
+    State(state): State<AppState>,
+    Json(body): Json<McpServerRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let name = body.name.trim().to_owned();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("MCP server name is required"));
+    }
+    coomi_services::upsert_mcp_config(&state.home, &name, &body.config)
+        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(15),
+        state.mcp_runtime.reload(&state.home),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "name": name })))
+}
+
+async fn get_mcp_server(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    let config = coomi_services::get_mcp_config(&state.home, &id)
+        .map_err(|error| ApiError::internal(format!("{error:#}")))?
+        .ok_or_else(|| ApiError::not_found(format!("MCP server `{id}` is not configured")))?;
+    Ok(Json(json!({ "name": id, "config": mask_mcp_config(&config) })))
+}
+
+async fn update_mcp_server(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<McpServerRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let existing = coomi_services::get_mcp_config(&state.home, &id)
+        .map_err(|error| ApiError::internal(format!("{error:#}")))?
+        .ok_or_else(|| ApiError::not_found(format!("MCP server `{id}` is not configured")))?;
+    let mut config = body.config;
+    merge_mcp_secrets(&mut config, &existing);
+    coomi_services::upsert_mcp_config(&state.home, &id, &config)
+        .map_err(|error| ApiError::bad_request(format!("{error:#}")))?;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(15),
+        state.mcp_runtime.reload(&state.home),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "name": id })))
+}
+
+async fn delete_mcp_server(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    coomi_services::remove_configured_mcp(&state.home, &id)
+        .map_err(|error| ApiError::not_found(format!("{error:#}")))?;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(15),
+        state.mcp_runtime.reload(&state.home),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "name": id })))
+}
+
+#[derive(Deserialize)]
+struct McpTestRequest {
+    #[serde(default)]
+    config: Value,
+}
+
+async fn test_mcp_server(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<McpTestRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let config = if body.config.as_object().is_some_and(|map| !map.is_empty()) {
+        body.config
+    } else {
+        coomi_services::get_mcp_config(&state.home, &id)
+            .map_err(|error| ApiError::internal(format!("{error:#}")))?
+            .ok_or_else(|| ApiError::not_found(format!("MCP server `{id}` is not configured")))?
+    };
+    let parsed: McpServerConfig = serde_json::from_value(config)
+        .map_err(|error| ApiError::bad_request(format!("invalid MCP config: {error}")))?;
+    let status = tokio::time::timeout(
+        Duration::from_secs(12),
+        state.mcp_runtime.test_config(&id, &parsed),
+    )
+    .await
+    .unwrap_or_else(|_| coomi_services::McpServerStatus {
+        name: id.clone(),
+        transport: parsed.transport.clone(),
+        enabled: parsed.enabled,
+        tools_count: 0,
+        error: Some("连接超时（12 秒）".into()),
+    });
+    Ok(Json(json!({ "ok": status.error.is_none(), "status": status })))
 }
 
 async fn install_skill_catalog(
@@ -7033,7 +7286,7 @@ async fn handle_command(
                 .get("effort")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if !matches!(effort, "auto" | "low" | "medium" | "high" | "xhigh") {
+            if !matches!(effort, "off" | "auto" | "low" | "medium" | "high" | "xhigh") {
                 context.send_error(envelope_id, "invalid reasoning effort");
                 return;
             }
@@ -8835,19 +9088,19 @@ impl AgentObserver for BrowserObserver {
                 }));
             }
             AgentEvent::PlanUpdated(plan) => {
-                if let Some((index, step)) = plan
-                    .steps
-                    .iter()
-                    .enumerate()
-                    .find(|(_, step)| step.status == PlanStepStatus::InProgress)
-                {
-                    self.task.push_event(json!({
-                        "event_type": "loop_step_start",
-                        "step_index": index + 1,
-                        "step_description": step.step,
-                        "total_steps": plan.steps.len(),
-                    }));
-                }
+                // 推送完整计划给前端，不再用 Loop 轮数冒充计划进度
+                self.task.push_event(json!({
+                    "event_type": "plan_updated",
+                    "explanation": plan.explanation,
+                    "steps": plan.steps.iter().map(|s| json!({
+                        "step": s.step,
+                        "status": match s.status {
+                            PlanStepStatus::Pending => "pending",
+                            PlanStepStatus::InProgress => "in_progress",
+                            PlanStepStatus::Completed => "completed",
+                        },
+                    })).collect::<Vec<_>>(),
+                }));
             }
             AgentEvent::LoopUpdated(loop_state) => {
                 self.task.push_event(json!({
@@ -10077,6 +10330,7 @@ mod tests {
             task_manager:Arc::new(TaskManager::open(&home).unwrap()),
             vision_degraded:Arc::new(StdMutex::new(HashSet::new())), registry_cache:Arc::new(StdMutex::new(None)),
             workflow_scheduler:crate::workflow::WorkflowScheduler::new(&home),
+            mcp_runtime:Arc::new(McpRuntime::default()),
             studio_approvals:Arc::new(StdMutex::new(HashMap::new())), studio_runs:Arc::new(StdMutex::new(HashMap::new())),
             studio_events:Arc::new(StdMutex::new(HashMap::new())), group_chat_runs:Arc::new(StdMutex::new(HashMap::new())),
             collab_runs:Arc::new(StdMutex::new(HashMap::new())),

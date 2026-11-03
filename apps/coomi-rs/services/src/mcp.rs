@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::Duration;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct McpServerStatus {
     pub name: String,
     pub transport: String,
@@ -99,26 +99,42 @@ struct McpDocument {
     servers: BTreeMap<String, McpServerConfig>,
 }
 
-#[derive(Clone, Deserialize)]
-struct McpServerConfig {
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+pub struct McpServerConfig {
     #[serde(default = "default_transport")]
-    transport: String,
+    pub transport: String,
     #[serde(default = "default_true")]
-    enabled: bool,
+    pub enabled: bool,
     #[serde(default)]
-    command: String,
+    pub command: String,
     #[serde(default)]
-    args: Vec<String>,
+    pub args: Vec<String>,
     #[serde(default)]
-    env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, String>,
     #[serde(default)]
-    cwd: String,
+    pub cwd: String,
     #[serde(default)]
-    url: String,
+    pub url: String,
     #[serde(default)]
-    headers: BTreeMap<String, String>,
+    pub headers: BTreeMap<String, String>,
     #[serde(default)]
-    framing: String,
+    pub framing: String,
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            transport: default_transport(),
+            enabled: true,
+            command: String::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            cwd: String::new(),
+            url: String::new(),
+            headers: BTreeMap::new(),
+            framing: String::new(),
+        }
+    }
 }
 
 fn default_transport() -> String {
@@ -288,6 +304,26 @@ impl McpRuntime {
             .read()
             .expect("MCP status lock poisoned")
             .clone()
+    }
+
+    /// 测试 MCP server 连接，不保存配置也不污染 live runtime。
+    pub async fn test_config(&self, name: &str, config: &McpServerConfig) -> McpServerStatus {
+        match connect(name, config).await {
+            Ok((_, specs)) => McpServerStatus {
+                name: name.to_string(),
+                transport: config.transport.clone(),
+                enabled: config.enabled,
+                tools_count: specs.len(),
+                error: None,
+            },
+            Err(error) => McpServerStatus {
+                name: name.to_string(),
+                transport: config.transport.clone(),
+                enabled: config.enabled,
+                tools_count: 0,
+                error: Some(format!("{error:#}")),
+            },
+        }
     }
 
     pub async fn call(&self, name: &str, arguments: Value) -> Option<ToolResult> {

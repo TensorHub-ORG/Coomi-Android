@@ -1031,7 +1031,8 @@ fn apply_model_parameters(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let requested_effort = effort.filter(|value| *value != "auto");
+    let disabled = effort == Some("off");
+    let requested_effort = effort.filter(|value| *value != "auto" && *value != "off");
     if let Some(field) = reasoning_field {
         remove_reasoning_fields(body);
         let mapped = requested_effort.and_then(|level| {
@@ -1047,7 +1048,12 @@ fn apply_model_parameters(
             }
         }
     } else if let Some(responses_api) = standard_reasoning {
-        apply_reasoning_effort(body, requested_effort, responses_api);
+        if disabled {
+            // 显式关闭：连提供商默认的推理字段一起清掉。
+            remove_reasoning_fields(body);
+        } else {
+            apply_reasoning_effort(body, requested_effort, responses_api);
+        }
     }
 }
 

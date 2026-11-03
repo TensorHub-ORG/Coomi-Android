@@ -2,7 +2,7 @@ import type { AgentEvent } from './events'
 
 export type PermissionMode = 'ask' | 'auto' | 'full' | 'minimal'
 export type ApprovalDecision = 'allow' | 'deny' | 'always'
-export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ReasoningEffort = 'off' | 'auto' | 'low' | 'medium' | 'high' | 'xhigh'
 export type SessionMode = 'agent' | 'life'
 
 export interface SendMessageCommand { command: 'send_message'; text: string }

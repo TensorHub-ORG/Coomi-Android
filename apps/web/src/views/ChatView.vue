@@ -243,7 +243,7 @@ watch(() => session.pendingQuestion?.callId, (id, previous) => {
         </button>
       </Transition>
 
-      <LoopProgressBar v-if="session.loop.active" :loop="session.loop" />
+      <LoopProgressBar v-if="(session.plan.active && session.plan.steps.length) || session.loop.active" />
       <div v-if="session.retryConfirmation" class="retry-confirm">
         <div><CoomiIcon name="alert" :size="16" /><span>{{ session.retryConfirmation }}</span></div>
         <div class="retry-actions">

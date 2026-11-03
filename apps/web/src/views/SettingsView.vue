@@ -44,6 +44,39 @@ onBeforeUnmount(() => {
 const reconnectMaxSeconds = ref(config.connectionSettings.reconnectMaxDelayMs / 1000)
 const connectionError = ref('')
 const connectionSaved = ref(false)
+/** 当前模型实际支持的推理档位；null 表示未知（保持全部可选项）。 */
+const supportedReasoningEfforts = ref<string[] | null>(null)
+const canDisableReasoning = ref(true)
+const reasoningOptions = computed(() => REASONING_EFFORTS.filter(item => {
+  if (item.value === 'auto') return true
+  if (item.value === 'off') return canDisableReasoning.value
+  return supportedReasoningEfforts.value === null || supportedReasoningEfforts.value.includes(item.value)
+}))
+
+watch([() => config.currentProviderId, () => config.currentModel], async ([providerId, model]) => {
+  if (!providerId || !model) { supportedReasoningEfforts.value = null; canDisableReasoning.value = true; return }
+  try {
+    const res = await authedFetch(`/api/model-capabilities?provider_id=${encodeURIComponent(providerId)}&model=${encodeURIComponent(model)}`)
+    if (!res.ok) throw new Error(String(res.status))
+    const data = await res.json()
+    const reasoning = data?.reasoning
+    if (reasoning?.supported) {
+      supportedReasoningEfforts.value = Array.isArray(reasoning.efforts) && reasoning.efforts.length ? reasoning.efforts : null
+      canDisableReasoning.value = reasoning.can_disable !== false
+    } else {
+      supportedReasoningEfforts.value = []
+      canDisableReasoning.value = false
+    }
+  } catch {
+    // 能力探测失败时退回全量选项，不阻止用户选择。
+    supportedReasoningEfforts.value = null
+    canDisableReasoning.value = true
+  }
+}, { immediate: true })
+
+watch(reasoningOptions, options => {
+  if (!options.some(item => item.value === config.reasoningEffort)) session.setReasoningEffort('auto')
+})
 function resetConnectionSettings() {
   connectionDraft.value = { ...DEFAULT_CONNECTION_SETTINGS }
   reconnectInitialSeconds.value = DEFAULT_CONNECTION_SETTINGS.reconnectInitialDelayMs / 1000
@@ -229,7 +262,7 @@ onMounted(async () => {
 <template v-if="activeTab === 'chat'">
       <p class="sec-label">推理强度</p>
       <div class="group compact-options">
-        <button v-for="item in REASONING_EFFORTS" :key="item.value" class="option" :class="{ selected: config.reasoningEffort === item.value }" @click="session.setReasoningEffort(item.value)">
+        <button v-for="item in reasoningOptions" :key="item.value" class="option" :class="{ selected: config.reasoningEffort === item.value }" @click="session.setReasoningEffort(item.value)">
           {{ item.label }}
         </button>
       </div>

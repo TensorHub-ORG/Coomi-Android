@@ -50,6 +50,9 @@ export interface LoopStepStartEvent { event_type: 'loop_step_start'; step_index:
 export interface LoopStepDoneEvent { event_type: 'loop_step_done'; step_index: number; success: boolean }
 export interface LoopProgressEvent { event_type: 'loop_progress'; current_step: number; total_steps: number; status: string }
 export interface LoopIssueCreatedEvent { event_type: 'loop_issue_created'; step_index: number; step_description: string }
+/** 引擎 PlanUpdated 事件：完整计划步骤，不再用 Loop 轮数冒充。 */
+export interface PlanStep { step: string; status: 'pending' | 'in_progress' | 'completed' }
+export interface PlanUpdatedEvent { event_type: 'plan_updated'; steps: PlanStep[]; explanation?: string }
 export interface ToolApprovalRequestEvent { event_type: 'tool_approval_request'; call_id: string; tool_name: string; arguments: Record<string, unknown>; access: ToolAccess; risk_summary?: string; }
 export interface UserQuestionOption { label: string; description: string }
 export interface UserQuestion { id: string; header: string; question: string; options: UserQuestionOption[] }
@@ -81,7 +84,7 @@ export type AgentEvent = (
   | ToolDoneEvent | ToolCacheHitEvent | UsageUpdateEvent | ConnectionRetryEvent | StreamResetEvent
   | CompressionEvent | CompressionStartedEvent | AgentErrorEvent | ConfigurationRequiredEvent | AgentCancelledEvent | BgTaskDetachedEvent
   | BgTaskCompletedEvent | LoopStepStartEvent | LoopStepDoneEvent | LoopProgressEvent
-  | LoopIssueCreatedEvent | RetryConfirmationEvent | ToolApprovalRequestEvent | UserQuestionRequestEvent
+  | LoopIssueCreatedEvent | PlanUpdatedEvent | RetryConfirmationEvent | ToolApprovalRequestEvent | UserQuestionRequestEvent
   | FileTransferRequestEvent
   | TurnEndEvent
   | TurnTruncatedEvent

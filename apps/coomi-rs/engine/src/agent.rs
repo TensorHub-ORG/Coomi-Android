@@ -475,7 +475,7 @@ impl Agent {
                 reasoning_effort: self.reasoning_effort.clone(),
                 session_id: Some(session.id.to_string()),
                 search_enabled: false,
-                thinking_enabled: true,
+                thinking_enabled: self.reasoning_effort.as_deref() != Some("off"),
             };
             let mut retry_attempt = 0_u8;
             let mut image_retry_used = false;
