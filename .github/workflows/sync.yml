@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   sync:
-    if: github.repository == 'TensorHub-ORG/Coomi'
+    if: github.repository == 'TensorHub-ORG/Coomi-Android'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

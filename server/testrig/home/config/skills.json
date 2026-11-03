@@ -25,7 +25,7 @@
       "enabled": true,
       "git_ref": "main",
       "path": "\\\\?\\F:\\_WorkSpace\\Projects\\Coomi-Android\\server\\testrig\\home\\skills\\runtime-environments",
-      "repository": "TensorHub-ORG/Coomi",
+      "repository": "TensorHub-ORG/Coomi-Android",
       "source": "runtime-environments",
       "source_type": "catalog",
       "subdir": ""

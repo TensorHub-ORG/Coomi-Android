@@ -85,7 +85,7 @@ def package_release(identity, sdk, output):
                 "date": now.astimezone(timezone(timedelta(hours=8))).date().isoformat(),
                 "publishedAt": now.isoformat().replace("+00:00", "Z"),
                 "size": target.stat().st_size, "sha256": digest, "notes": notes,
-                "url": f"https://gh-proxy.com/https://github.com/{os.environ.get('GITHUB_REPOSITORY', 'TensorHub-ORG/Coomi')}/releases/download/{identity['tag']}/{identity['file']}",
+                "url": f"https://gh-proxy.com/https://github.com/{os.environ.get('GITHUB_REPOSITORY', 'TensorHub-ORG/Coomi-Android')}/releases/download/{identity['tag']}/{identity['file']}",
                 "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()}
     heading = re.search(r"^#\s+(.+更新说明【(?:稳定|测试)】)\s*$", notes, re.MULTILINE)
     if heading:

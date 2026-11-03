@@ -42,9 +42,9 @@ public final class UpdateChecker {
      * 不再依赖自建服务器下载源。
      */
     private static final String UPDATE_BASE =
-        "https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi/main/deploy/updates/android";
+        "https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi-Android/main/deploy/updates/android";
     private static final String TEST_UPDATE_BASE =
-        "https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi/main/deploy/updates/android-test";
+        "https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi-Android/main/deploy/updates/android-test";
     private static final String UPDATE_URL = UPDATE_BASE + "/latest.json";
     private static final String TEST_UPDATE_URL = TEST_UPDATE_BASE + "/latest.json";
     private static final String PREFS_NAME = "coomi_settings";

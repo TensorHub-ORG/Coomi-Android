@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/TensorHub-ORG/Coomi/tools/mobile-build/buildkit-manifest.schema.json",
+  "$id": "https://github.com/TensorHub-ORG/Coomi-Android/tools/mobile-build/buildkit-manifest.schema.json",
   "title": "CoomiDev ARM64 Build Kit manifest",
   "type": "object",
   "additionalProperties": false,

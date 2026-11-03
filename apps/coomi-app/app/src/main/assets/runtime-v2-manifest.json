@@ -5,12 +5,12 @@
   "proot_commit": "61681c6481197e3c0cec6726075053adb740f235",
   "proot_license": "GPL-2.0-or-later",
   "host": {
-    "url": "https://github.com/TensorHub-ORG/Coomi/releases/download/runtime-v2-ubuntu-noble-20260907/proot-host-arm64.tar.gz",
+    "url": "https://github.com/TensorHub-ORG/Coomi-Android/releases/download/runtime-v2-ubuntu-noble-20260907/proot-host-arm64.tar.gz",
     "sha256": "77eb98f3d528bb83db0bba6fec703f577724dd7fefcaf8cafc34607eaac60f0e",
     "size": 119181
   },
   "rootfs": {
-    "url": "https://github.com/TensorHub-ORG/Coomi/releases/download/runtime-v2-ubuntu-noble-20260907/ubuntu-noble-arm64.tar.gz",
+    "url": "https://github.com/TensorHub-ORG/Coomi-Android/releases/download/runtime-v2-ubuntu-noble-20260907/ubuntu-noble-arm64.tar.gz",
     "sha256": "b21e06186c0ad6bfaca7e6d6ff27b0e4d2e592a320e98b2a20d32ab9a54e8769",
     "size": 311219155
   },

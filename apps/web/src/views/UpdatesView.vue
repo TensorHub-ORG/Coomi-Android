@@ -6,7 +6,7 @@ import { splitUpdateNotes } from '@/utils/updateNotes'
 import { goBack } from '@/bridge/navigation'
 
 /** 更新通道：正式 / 测试，元数据放在 GitHub 仓库，经 gh-proxy.com 加速。 */
-const GITHUB_UPDATES = 'https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi/main/deploy/updates'
+const GITHUB_UPDATES = 'https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi-Android/main/deploy/updates'
 const CHANNELS = {
   stable: { label: '正式更新', dir: `${GITHUB_UPDATES}/android` },
   test: { label: '测试更新', dir: `${GITHUB_UPDATES}/android-test` },

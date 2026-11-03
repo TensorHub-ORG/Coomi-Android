@@ -4,7 +4,7 @@
   "tag": "v1.4.9-fix.6",
   "channel": "stable",
   "file": "Coomi-Android-arm64-v1.4.9-fix.6.apk",
-  "url": "https://gh-proxy.com/https://github.com/TensorHub-ORG/Coomi/releases/download/v1.4.9-fix.6/Coomi-Android-arm64-v1.4.9-fix.6.apk",
+  "url": "https://gh-proxy.com/https://github.com/TensorHub-ORG/Coomi-Android/releases/download/v1.4.9-fix.6/Coomi-Android-arm64-v1.4.9-fix.6.apk",
   "platform": "android",
   "arch": "arm64-v8a",
   "minAndroid": "7.0",

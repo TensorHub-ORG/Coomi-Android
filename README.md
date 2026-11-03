@@ -1,8 +1,8 @@
 # Coomi
 
-> **当前源码版本：v1.5.0-test.4（测试版）· 最新稳定版：v1.4.7**（Android ARM64）· [下载稳定版 APK](https://updates.septemc.com/coomi/android/Coomi-Android-arm64-v1.4.7.apk) · [GitHub Releases](https://github.com/TensorHub-ORG/Coomi/releases) · [官网](https://coomi.septemc.com/)
+> **当前源码版本：v1.5.0-test.5（测试版）· 最新稳定版：v1.4.9-fix.6**（Android ARM64）· [下载稳定版 APK](https://gh-proxy.com/https://github.com/TensorHub-ORG/Coomi-Android/releases/download/v1.4.9-fix.6/Coomi-Android-arm64-v1.4.9-fix.6.apk) · [GitHub Releases](https://github.com/TensorHub-ORG/Coomi-Android/releases) · [官网](https://coomi.septemc.com/)
 >
-> v1.5.0-test.4 测试内容：会话运行过程恢复、上下文用量统计和终端主题等。测试版可能不稳定，不替代稳定版下载。
+> v1.5.0-test.5 测试内容：指令确认、计划进度、推理关闭档、终端黑白双主题、MCP 可视化配置与 GitHub 更新源等。测试版可能不稳定，不替代稳定版下载。
 
 <table align="center">
   <tr>
@@ -69,7 +69,7 @@ Coomi 是一款面向 Android 的 AI Agent 工作环境。可以用于手机上�
 
 ## 快速开始
 
-1. 从 [GitHub Releases](https://github.com/TensorHub-ORG/Coomi/releases) 或[官网](https://coomi.septemc.com/)下载最新稳定版 APK（`Coomi-Android-arm64-v1.4.7.apk`），安装到 Android 7.0+ 的 ARM64 设备。
+1. 从 [GitHub Releases](https://github.com/TensorHub-ORG/Coomi-Android/releases) 或[官网](https://coomi.septemc.com/)下载最新稳定版 APK（`Coomi-Android-arm64-v1.4.9-fix.6.apk`），安装到 Android 7.0+ 的 ARM64 设备。
 2. 打开 App，完成引导：配置模型服务商（Provider）与 API Key，或先跳过、稍后在「对话设置 → Provider 配置」中填写。
 3. 进入对话界面，向 Agent 下达任务——它可以执行命令、读写文件、识别图片、管理 SKILL/MCP。
 
@@ -95,8 +95,8 @@ Coomi-Android/
 ## 文档
 
 - [官网与下载](https://coomi.septemc.com/)
-- [更新源](https://updates.septemc.com/coomi/android/latest.json)
-- [GitHub Releases](https://github.com/TensorHub-ORG/Coomi/releases)
+- [更新源](https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi-Android/main/deploy/updates/android/latest.json)
+- [GitHub Releases](https://github.com/TensorHub-ORG/Coomi-Android/releases)
 
 ## 许可证
 
