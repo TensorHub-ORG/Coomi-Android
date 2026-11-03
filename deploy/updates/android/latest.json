@@ -1,0 +1,15 @@
+{
+  "version": "1.4.9-fix.6",
+  "versionCode": 89,
+  "tag": "v1.4.9-fix.6",
+  "channel": "stable",
+  "file": "Coomi-Android-arm64-v1.4.9-fix.6.apk",
+  "url": "https://gh-proxy.com/https://github.com/TensorHub-ORG/Coomi/releases/download/v1.4.9-fix.6/Coomi-Android-arm64-v1.4.9-fix.6.apk",
+  "platform": "android",
+  "arch": "arm64-v8a",
+  "minAndroid": "7.0",
+  "date": "2026-10-09",
+  "size": 356119512,
+  "sha256": "949e96d4d609f361f6900622f4669d50ef61e81418fda071be3cec6187c1ede2",
+  "notes": "# v1.4.9-fix.6 更新说明【稳定】\n\n- 拓展管理新增“联网”页签，支持配置、替换与移除 tavily（联网搜索）密钥，界面不回传已保存的明文密钥。\n- 搜索优先使用供应商原生 Web Search，其次使用配置的 Tavily，未配置时使用默认搜索。\n- 新增个人笔记本，每条笔记独立保存为 TXT 文件，支持多个笔记、标题搜索、全屏编辑、草稿恢复、版本冲突检查与删除确认。\n- 右上角扇形快捷工具将“任务”替换为“笔记”，控制台“会话与体验”在提示词库下新增笔记入口。\n- “读取笔记”只将笔记名称和 ID 填入会话输入框，由用户发送后读取。笔记不自动注入 AI 上下文，也不作为持久记忆加载。\n- 修复会话快捷面板中的笔记全屏编辑与确认弹窗被误判为外部点击、导致面板自动关闭的问题。\n- 笔记入口统一使用笔记本图标，版本使用简化 Git 标志，用量使用仪表盘图标。"
+}

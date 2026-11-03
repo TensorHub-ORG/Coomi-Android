@@ -5,10 +5,11 @@ import PageHead from '@/components/PageHead.vue'
 import { splitUpdateNotes } from '@/utils/updateNotes'
 import { goBack } from '@/bridge/navigation'
 
-/** 更新通道：正式 / 测试，取自 updates.septemc.com 各自目录下的 latest.json。 */
+/** 更新通道：正式 / 测试，元数据放在 GitHub 仓库，经 gh-proxy.com 加速。 */
+const GITHUB_UPDATES = 'https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi/main/deploy/updates'
 const CHANNELS = {
-  stable: { label: '正式更新', dir: 'https://updates.septemc.com/coomi/android' },
-  test: { label: '测试更新', dir: 'https://updates.septemc.com/coomi/android_test' },
+  stable: { label: '正式更新', dir: `${GITHUB_UPDATES}/android` },
+  test: { label: '测试更新', dir: `${GITHUB_UPDATES}/android-test` },
 } as const
 
 type Channel = keyof typeof CHANNELS
@@ -61,6 +62,7 @@ async function refresh() {
     if (!response.ok) throw new Error(`更新源返回 HTTP ${response.status}`)
     const data = await response.json()
     const file: string | undefined = data.file
+    const directUrl: string | undefined = typeof data.url === 'string' && data.url ? data.url : undefined
     if (generation !== refreshGeneration) return
     info.value = {
       versionCode: Number(data.versionCode) || 0,
@@ -68,7 +70,7 @@ async function refresh() {
       notes: String(data.notes ?? ''),
       date: String(data.date ?? ''),
       channel: selectedChannel,
-      apkUrl: file ? `${dir}/${file}` : undefined,
+      apkUrl: directUrl ?? (file ? `${dir}/${file}` : undefined),
     }
   } catch (e) {
     if (generation !== refreshGeneration) return
@@ -122,7 +124,7 @@ async function refreshDots() {
 }
 
 function loadTestDot() {
-  testDotEnabled.value = window.CoomiAndroid?.getTestUpdateDotEnabled?.() ?? false
+  testDotEnabled.value = window.CoomiAndroid?.getTestUpdateDotEnabled?.() ?? true
 }
 
 function setTestDot(event: Event) {

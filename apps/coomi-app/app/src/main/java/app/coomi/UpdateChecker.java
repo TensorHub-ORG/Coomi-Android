@@ -37,10 +37,16 @@ import org.json.JSONObject;
  */
 public final class UpdateChecker {
 
-    private static final String UPDATE_URL =
-        "https://updates.septemc.com/coomi/android/latest.json";
-    private static final String TEST_UPDATE_URL =
-        "https://updates.septemc.com/coomi/android_test/latest.json";
+    /**
+     * 更新源改为 GitHub 仓库内的元数据 + GitHub Release 资产，统一经 gh-proxy.com 加速。
+     * 不再依赖自建服务器下载源。
+     */
+    private static final String UPDATE_BASE =
+        "https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi/main/deploy/updates/android";
+    private static final String TEST_UPDATE_BASE =
+        "https://gh-proxy.com/https://raw.githubusercontent.com/TensorHub-ORG/Coomi/main/deploy/updates/android-test";
+    private static final String UPDATE_URL = UPDATE_BASE + "/latest.json";
+    private static final String TEST_UPDATE_URL = TEST_UPDATE_BASE + "/latest.json";
     private static final String PREFS_NAME = "coomi_settings";
     private static final String KEY_TEST_UPDATE_DOT = "test_update_dot_enabled";
     private static final String KEY_UPDATE_REMINDERS = "update_reminders_enabled";
@@ -69,10 +75,10 @@ public final class UpdateChecker {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_UPDATE_REMINDERS, enabled).apply();
     }
 
-    /** 测试通道更新是否也亮红点（用户可选，默认关）。 */
+    /** 测试通道更新是否也亮红点（默认开：内置更新会主动发现测试版并提示）。 */
     public static boolean isTestUpdateDotEnabled(Context context) {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(KEY_TEST_UPDATE_DOT, BuildConfig.VERSION_NAME.contains("-test"));
+            .getBoolean(KEY_TEST_UPDATE_DOT, true);
     }
 
     public static void setTestUpdateDotEnabled(Context context, boolean enabled) {
@@ -102,22 +108,37 @@ public final class UpdateChecker {
         }
     }
 
+    /** latest.json 里的 url 优先（GitHub Release 资产），旧格式回退到 file + 通道目录。 */
+    private static String releaseApkUrl(JSONObject release, String baseUrl) {
+        if (release == null) return "";
+        String direct = release.optString("url", "");
+        if (!direct.isEmpty()) return direct;
+        String file = release.optString("file", "");
+        return file.isEmpty() ? "" : baseUrl + "/" + file;
+    }
+
     /**
      * 静默红点检查（双通道策略）：
-     * - 正式通道有更新 → 必亮红点；
-     * - 测试通道有更新 → 仅当用户开启「测试更新提醒」时亮红点。
-     * 手动进「检查更新」页面不受开关影响，两通道均可检查与下载。
+     * - 两个通道都会检查，取版本号更高的一个；
+     * - 测试通道有更新时提示「【测试版】」，测试红点可由开关控制（默认开）。
      */
     public static void checkSilent(final Context context, final Callback callback) {
         final int current = currentVersionCode(context);
         new Thread(() -> {
             JSONObject stable = fetchLatest(UPDATE_URL, current);
             JSONObject test = fetchLatest(TEST_UPDATE_URL, current);
-            boolean stableUpdate = stable != null && stable.optInt("versionCode", 0) > current;
-            boolean testUpdate = test != null && test.optInt("versionCode", 0) > current;
-            boolean dot = remindersEnabled(context) && (stableUpdate || (testUpdate && isTestUpdateDotEnabled(context)));
-            JSONObject chosen = stableUpdate ? stable : (testUpdate ? test : null);
-            String version = chosen == null ? null : chosen.optString("version", "") + (chosen == test ? "【测试版】" : "");
+            int stableCode = stable == null ? 0 : stable.optInt("versionCode", 0);
+            int testCode = test == null ? 0 : test.optInt("versionCode", 0);
+            boolean stableUpdate = stableCode > current;
+            boolean testUpdate = testCode > current;
+            boolean chooseTest = testUpdate && (!stableUpdate || testCode > stableCode);
+            JSONObject chosen = chooseTest ? test : (stableUpdate ? stable : null);
+            boolean chosenUpdate = chosen != null;
+            boolean dot = remindersEnabled(context) && chosenUpdate
+                && (!chooseTest || isTestUpdateDotEnabled(context));
+            String version = chosen == null
+                ? null
+                : chosen.optString("version", "") + (chooseTest ? "【测试版】" : "");
             String notes = chosen == null ? null : chosen.optString("notes", "");
             // 回调必须切回主线程：控制台在回调里直接操作 View（红点/文案），
             // 后台线程触碰 UI 会 CalledFromWrongThreadException 闪退。
@@ -129,34 +150,37 @@ public final class UpdateChecker {
     public static void check(final Context context, final boolean autoInstall, final Callback callback) {
         new Thread(() -> {
             try {
-                URL url = new URL(UPDATE_URL);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(8000);
-                conn.setRequestProperty("User-Agent", "Coomi-Android/" + currentVersionCode(context));
-                int code = conn.getResponseCode();
-                if (code != 200) {
-                    new Handler(Looper.getMainLooper()).post(() -> callback.onResult(false, null, null, "更新源返回 HTTP " + code));
+                int current = currentVersionCode(context);
+                JSONObject stable = fetchLatest(UPDATE_URL, current);
+                JSONObject test = fetchLatest(TEST_UPDATE_URL, current);
+                int stableCode = stable == null ? 0 : stable.optInt("versionCode", 0);
+                int testCode = test == null ? 0 : test.optInt("versionCode", 0);
+                boolean stableUpdate = stableCode > current;
+                boolean testUpdate = testCode > current;
+                if (!stableUpdate && !testUpdate) {
+                    boolean reachable = stable != null || test != null;
+                    String version = BuildConfig.VERSION_NAME;
+                    String error = reachable ? null : "检查失败：无法连接更新源";
+                    new Handler(Looper.getMainLooper()).post(() -> callback.onResult(false, version, null, error));
                     return;
                 }
-                try (InputStream in = conn.getInputStream()) {
-                    java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
-                    byte[] chunk = new byte[8192];
-                    int n;
-                    while ((n = in.read(chunk)) >= 0) buffer.write(chunk, 0, n);
-                    JSONObject json = new JSONObject(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
-                    int remoteCode = json.optInt("versionCode", 0);
-                    String version = json.optString("version", "");
-                    String notes = json.optString("notes", "");
-                    String file = json.optString("file", "");
-                    String apkUrl = UPDATE_URL.substring(0, UPDATE_URL.lastIndexOf('/')) + "/" + file;
-                    int current = currentVersionCode(context);
-                    boolean hasUpdate = remoteCode > current;
-                    if (hasUpdate && autoInstall) {
-                        downloadAndInstall(context, apkUrl, version);
-                    }
-                    callback.onResult(hasUpdate, version, notes, null);
+                boolean chooseTest = testUpdate && (!stableUpdate || testCode > stableCode);
+                JSONObject chosen = chooseTest ? test : stable;
+                String version = chosen.optString("version", "");
+                String notes = chosen.optString("notes", "");
+                String apkUrl = releaseApkUrl(chosen, chooseTest ? TEST_UPDATE_BASE : UPDATE_BASE);
+                if (chooseTest) {
+                    version += "【测试版】";
+                    notes = "这是测试版本，可能不稳定。\n\n" + notes;
                 }
+                boolean hasUpdate = chosen.optInt("versionCode", 0) > current;
+                if (hasUpdate && autoInstall && !apkUrl.isEmpty()) {
+                    downloadAndInstall(context, apkUrl, version);
+                }
+                final String finalVersion = version;
+                final String finalNotes = notes;
+                final boolean finalHasUpdate = hasUpdate;
+                new Handler(Looper.getMainLooper()).post(() -> callback.onResult(finalHasUpdate, finalVersion, finalNotes, null));
             } catch (Exception e) {
                 new Handler(Looper.getMainLooper()).post(() -> callback.onResult(false, null, null, "检查失败：" + e.getMessage()));
             }
@@ -279,11 +303,15 @@ public final class UpdateChecker {
                 } else if (!hasUpdate) {
                     Toast.makeText(context, "已是最新版本（" + version + "）", Toast.LENGTH_SHORT).show();
                 } else {
+                    String message = notes == null || notes.isEmpty()
+                        ? "正在后台下载更新包，完成后自动弹出安装。"
+                        : notes + "\n\n正在后台下载更新包，完成后自动弹出安装。";
+                    if (version != null && version.contains("测试版")) {
+                        message = "这是测试版本，可能不稳定，正式使用请等待正式更新。\n\n" + message;
+                    }
                     new AlertDialog.Builder(context)
                         .setTitle("发现新版本 " + version)
-                        .setMessage(notes == null || notes.isEmpty()
-                            ? "正在后台下载更新包，完成后自动弹出安装。"
-                            : notes + "\n\n正在后台下载更新包，完成后自动弹出安装。")
+                        .setMessage(message)
                         .setPositiveButton("知道了", null)
                         .show();
                 }
