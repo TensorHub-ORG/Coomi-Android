@@ -243,6 +243,7 @@ async fn run_turn(
         .with_mcp_runtime(Arc::new(McpRuntime::load(&paths.home).await))
         .with_memory(Arc::new(MemoryManager::new(&paths.home, &paths.cwd)))
         .with_hooks(Arc::new(HookRunner::load(&paths.home)?))
+        .with_file_history(paths.home.clone(), session.id.to_string())
         .with_agent_scheduler(scheduler, session.messages.clone());
     let provider = HttpModelProvider::new(provider_config)?;
     let instructions = coomi_engine::discover_project_instructions(&paths.cwd)?;
@@ -251,7 +252,12 @@ async fn run_turn(
         interactive,
         approve_all: cli.yes,
     };
-    let agent = Agent::new(system_prompt);
+    let checkpoint_home = paths.home.clone();
+    let agent = Agent::new(system_prompt).with_durable_checkpoint(Arc::new(move |session| {
+        SessionStore::new(&checkpoint_home)
+            .save(session)
+            .map_err(|error| format!("{error:#}"))
+    }));
     agent
         .run_turn(
             session,
@@ -299,6 +305,7 @@ async fn compact_session(
         .with_mcp_runtime(Arc::new(McpRuntime::load(&paths.home).await))
         .with_memory(Arc::new(MemoryManager::new(&paths.home, &paths.cwd)))
         .with_hooks(Arc::new(HookRunner::load(&paths.home)?))
+        .with_file_history(paths.home.clone(), session.id.to_string())
         .with_agent_scheduler(scheduler, session.messages.clone());
     let provider = HttpModelProvider::new(provider_config)?;
     Agent::new(prompt)
@@ -416,7 +423,11 @@ fn print_sessions(store: &SessionStore, cwd: Option<&Path>) -> Result<()> {
             session.updated_at.format("%Y-%m-%d %H:%M"),
             session.provider_id,
             session.model,
-            session.preview
+            if session.title.is_empty() {
+                session.preview
+            } else {
+                session.title
+            }
         );
     }
     Ok(())
@@ -545,7 +556,22 @@ impl AgentObserver for TerminalObserver {
                 let status = if result.success { "ok" } else { "error" };
                 eprintln!("[tool {} {status}] {}", call.name, preview(&result.output));
             }
-            AgentEvent::TurnCompleted(usage) => print_usage(usage),
+            AgentEvent::ConnectionRetry {
+                attempt,
+                max_attempts,
+                delay_ms,
+                message,
+            } => eprintln!("[reconnect {attempt}/{max_attempts} in {delay_ms}ms] {message}"),
+            AgentEvent::StreamReset => eprintln!("[stream reset]"),
+            AgentEvent::ReasoningCompleted => {}
+            AgentEvent::PersistenceFailed(error) => eprintln!("[persistence failed] {error}"),
+            AgentEvent::ModelUsage { total, .. } => {
+                eprintln!(
+                    "[usage {} input / {} output]",
+                    total.input_tokens, total.output_tokens
+                )
+            }
+            AgentEvent::TurnCompleted { total, .. } => print_usage(total),
             AgentEvent::ModelStarted { .. } => {}
         }
     }

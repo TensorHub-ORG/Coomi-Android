@@ -287,7 +287,7 @@ fn render_recent_sessions(frame: &mut Frame<'_>, area: Rect, app: &TuiState, div
                 Span::styled("● ", Style::default().fg(theme::MINT)),
                 Span::styled(format!("{date}  "), Style::default().fg(theme::MUTED)),
                 Span::styled(
-                    truncate_cells(&session.preview, preview_width),
+                    truncate_cells(session_label(session), preview_width),
                     Style::default().fg(theme::TEXT),
                 ),
             ]));
@@ -706,7 +706,7 @@ fn render_history(frame: &mut Frame<'_>, area: Rect, app: &TuiState) {
                     Style::default().fg(theme::SKY),
                 ),
                 Span::styled(
-                    truncate_cells(&session.preview, 38),
+                    truncate_cells(session_label(session), 38),
                     Style::default().fg(theme::TEXT),
                 ),
             ]))
@@ -2721,6 +2721,14 @@ fn compact_path(path: &str, max_width: usize) -> String {
         reversed = next;
     }
     format!("…{reversed}")
+}
+
+fn session_label(session: &coomi_engine::SessionSummary) -> &str {
+    if session.title.trim().is_empty() {
+        &session.preview
+    } else {
+        &session.title
+    }
 }
 
 #[cfg(test)]

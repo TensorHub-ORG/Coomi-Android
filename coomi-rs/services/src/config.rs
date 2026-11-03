@@ -14,6 +14,10 @@ pub enum ProviderKind {
     OpenAiResponses,
     AnthropicMessages,
     GeminiNative,
+    /// Retained so Android-authored provider files stay readable. The desktop
+    /// runtime reports a clear error because the private account protocol needs
+    /// the mobile login flow.
+    DeepseekAccount,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -55,6 +59,7 @@ impl ProviderKind {
             "openai" | "openai_responses" | "responses" => Ok(Self::OpenAiResponses),
             "anthropic" | "anthropic_messages" => Ok(Self::AnthropicMessages),
             "gemini" | "gemini_native" => Ok(Self::GeminiNative),
+            "deepseek_account" | "deepseek_login" => Ok(Self::DeepseekAccount),
             other => anyhow::bail!("unsupported provider protocol: {other}"),
         }
     }
@@ -66,11 +71,22 @@ pub struct ProviderConfig {
     pub kind: ProviderKind,
     pub display: String,
     pub api_key: String,
+    pub api_keys: Vec<String>,
     pub base_url: String,
     pub model: String,
     pub fast_model: Option<String>,
+    /// Models declared by the provider editor, used to validate `provider:model`.
+    pub models: Vec<String>,
+    /// Per-model context window overrides.
+    pub model_context_windows: BTreeMap<String, u64>,
+    /// Per-model vision capability overrides.
+    pub model_vision_support: BTreeMap<String, bool>,
+    /// Per-model sampling parameters and reasoning mappings.
+    pub model_parameters: BTreeMap<String, Value>,
     pub capabilities: coomi_engine::ModelCapabilities,
     pub remote_compaction_mode: RemoteCompactionMode,
+    /// Additional request headers (for example gateway verification headers).
+    pub extra_headers: BTreeMap<String, String>,
 }
 
 impl std::fmt::Debug for ProviderConfig {
@@ -84,6 +100,9 @@ impl std::fmt::Debug for ProviderConfig {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("fast_model", &self.fast_model)
+            .field("model_context_windows", &self.model_context_windows)
+            .field("model_vision_support", &self.model_vision_support)
+            .field("model_parameters", &self.model_parameters)
             .field("capabilities", &self.capabilities)
             .field("remote_compaction_mode", &self.remote_compaction_mode)
             .finish()
@@ -126,6 +145,8 @@ pub struct ProviderSettings {
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
+    pub api_keys: Vec<String>,
+    #[serde(default)]
     pub base_url: String,
     #[serde(default)]
     pub model: String,
@@ -133,6 +154,8 @@ pub struct ProviderSettings {
     pub fast_model: Option<String>,
     #[serde(default)]
     pub context_window: Option<u64>,
+    #[serde(default)]
+    pub model_context_windows: BTreeMap<String, u64>,
     #[serde(default)]
     pub effective_context_window_percent: Option<u8>,
     #[serde(default)]
@@ -172,8 +195,10 @@ impl ProviderRegistry {
         let raw = ProviderDocument::load(path)?;
         let mut providers = BTreeMap::new();
         for (id, provider) in raw.providers {
+            // Draft providers (no model selected yet) stay in the file but are
+            // excluded from the runtime registry until the user completes them.
             if provider.model.trim().is_empty() {
-                anyhow::bail!("provider `{id}` has no model");
+                continue;
             }
             if provider.base_url.trim().is_empty() {
                 anyhow::bail!("provider `{id}` has no base_url");
@@ -187,6 +212,64 @@ impl ProviderRegistry {
             } else {
                 provider.display
             };
+            let mut model_vision_support = provider
+                .extra
+                .get("capabilityOverrides")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .filter_map(|(model, value)| {
+                    value
+                        .get("vision")
+                        .and_then(Value::as_bool)
+                        .map(|enabled| (model.clone(), enabled))
+                })
+                .collect::<BTreeMap<_, _>>();
+            for model in provider
+                .extra
+                .get("models")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                model_vision_support
+                    .entry(model.to_owned())
+                    .or_insert(provider.supports_vision);
+            }
+            model_vision_support
+                .entry(provider.model.clone())
+                .or_insert(provider.supports_vision);
+            let manual_vision = model_vision_support
+                .get(&provider.model)
+                .copied()
+                .unwrap_or(provider.supports_vision);
+            let native_tools_enabled = provider.supports_native_tools
+                && provider
+                    .tool_protocol
+                    .as_deref()
+                    .is_none_or(|protocol| !protocol.eq_ignore_ascii_case("disabled"));
+            let mut capabilities = coomi_engine::ModelCapabilities {
+                context_window: provider.context_window.unwrap_or(256_000),
+                effective_context_window_percent: provider
+                    .effective_context_window_percent
+                    .unwrap_or(95)
+                    .clamp(1, 100),
+                auto_compact_token_limit: provider.auto_compact_token_limit,
+                auto_compact_scope: provider.auto_compact_scope,
+                comp_hash: provider.comp_hash,
+                max_output_tokens: provider.max_output_tokens.unwrap_or(8_192),
+                supports_remote_compaction: provider
+                    .supports_remote_compaction
+                    .unwrap_or(kind == ProviderKind::OpenAiResponses),
+                supports_vision: manual_vision,
+                supports_native_tools: native_tools_enabled,
+                supports_web_search: provider.supports_web_search,
+                supports_parallel_tool_calls: provider.supports_parallel_tool_calls,
+            };
+            if let Some(window) = provider.model_context_windows.get(&provider.model) {
+                capabilities.context_window = *window;
+            }
             providers.insert(
                 id.clone(),
                 ProviderConfig {
@@ -194,32 +277,47 @@ impl ProviderRegistry {
                     kind,
                     display,
                     api_key: provider.api_key,
+                    api_keys: provider.api_keys.clone(),
                     base_url: provider.base_url,
                     model: provider.model,
                     fast_model: provider.fast_model.filter(|value| !value.trim().is_empty()),
-                    capabilities: coomi_engine::ModelCapabilities {
-                        context_window: provider.context_window.unwrap_or(256_000),
-                        effective_context_window_percent: provider
-                            .effective_context_window_percent
-                            .unwrap_or(95)
-                            .clamp(1, 100),
-                        auto_compact_token_limit: provider.auto_compact_token_limit,
-                        auto_compact_scope: provider.auto_compact_scope,
-                        comp_hash: provider.comp_hash,
-                        max_output_tokens: provider.max_output_tokens.unwrap_or(8_192),
-                        supports_remote_compaction: provider
-                            .supports_remote_compaction
-                            .unwrap_or(kind == ProviderKind::OpenAiResponses),
-                        supports_vision: provider.supports_vision,
-                        supports_native_tools: provider.supports_native_tools
-                            && provider
-                                .tool_protocol
-                                .as_deref()
-                                .is_none_or(|protocol| !protocol.eq_ignore_ascii_case("disabled")),
-                        supports_web_search: provider.supports_web_search,
-                        supports_parallel_tool_calls: provider.supports_parallel_tool_calls,
-                    },
+                    models: provider
+                        .extra
+                        .get("models")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                    model_context_windows: provider.model_context_windows,
+                    model_vision_support,
+                    model_parameters: provider
+                        .extra
+                        .get("modelParameters")
+                        .and_then(Value::as_object)
+                        .map(|parameters| {
+                            parameters
+                                .iter()
+                                .map(|(model, value)| (model.clone(), value.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    capabilities,
                     remote_compaction_mode: provider.remote_compaction_mode,
+                    extra_headers: provider
+                        .extra
+                        .get("headers")
+                        .and_then(Value::as_object)
+                        .map(|headers| {
+                            headers
+                                .iter()
+                                .filter_map(|(key, value)| {
+                                    value.as_str().map(|value| (key.clone(), value.to_string()))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 },
             );
         }
@@ -286,6 +384,7 @@ impl ProviderRegistry {
                     .context("model choice references a missing provider")?
                     .clone();
                 provider.model = choice.model;
+                apply_model_overrides(&mut provider);
                 return Ok(provider);
             }
         }
@@ -293,14 +392,20 @@ impl ProviderRegistry {
         if let Some((provider_id, model)) = selector.split_once(':')
             && let Some(provider) = self.find_provider(provider_id)
         {
+            let in_models = provider
+                .models
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(model));
             let allowed = provider.model.eq_ignore_ascii_case(model)
                 || provider
                     .fast_model
                     .as_deref()
-                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(model));
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(model))
+                || in_models;
             if allowed {
                 let mut provider = provider.clone();
                 provider.model = model.to_string();
+                apply_model_overrides(&mut provider);
                 return Ok(provider);
             }
             anyhow::bail!(
@@ -318,6 +423,15 @@ impl ProviderRegistry {
                 .values()
                 .find(|provider| provider.id.eq_ignore_ascii_case(id))
         })
+    }
+}
+
+fn apply_model_overrides(provider: &mut ProviderConfig) {
+    if let Some(window) = provider.model_context_windows.get(&provider.model) {
+        provider.capabilities.context_window = *window;
+    }
+    if let Some(enabled) = provider.model_vision_support.get(&provider.model) {
+        provider.capabilities.supports_vision = *enabled;
     }
 }
 
@@ -339,25 +453,26 @@ impl ProviderDocument {
     }
 
     pub fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.providers.is_empty(),
-            "at least one provider is required"
-        );
-        anyhow::ensure!(
-            self.providers.contains_key(&self.active),
-            "active provider `{}` does not exist",
-            self.active
-        );
+        if !self.active.is_empty() {
+            anyhow::ensure!(
+                self.providers.contains_key(&self.active),
+                "active provider `{}` does not exist",
+                self.active
+            );
+        }
         for (id, provider) in &self.providers {
             anyhow::ensure!(!id.trim().is_empty(), "provider ID must not be empty");
-            anyhow::ensure!(
-                !provider.model.trim().is_empty(),
-                "provider `{id}` has no model"
-            );
-            anyhow::ensure!(
-                !provider.base_url.trim().is_empty(),
-                "provider `{id}` has no base_url"
-            );
+            // Inactive providers may be drafts until the user completes them.
+            if !self.active.is_empty() && id == &self.active {
+                anyhow::ensure!(
+                    !provider.model.trim().is_empty(),
+                    "active provider `{id}` has no model"
+                );
+                anyhow::ensure!(
+                    !provider.base_url.trim().is_empty(),
+                    "active provider `{id}` has no base_url"
+                );
+            }
             ProviderKind::from_config(&provider.provider_type, provider.tool_protocol.as_deref())?;
         }
         Ok(())
@@ -371,10 +486,12 @@ impl Default for ProviderSettings {
             tool_protocol: Some("auto".into()),
             display: String::new(),
             api_key: String::new(),
+            api_keys: Vec::new(),
             base_url: String::new(),
             model: String::new(),
             fast_model: None,
             context_window: None,
+            model_context_windows: BTreeMap::new(),
             effective_context_window_percent: None,
             auto_compact_token_limit: None,
             auto_compact_scope: coomi_engine::AutoCompactScope::Total,
@@ -434,6 +551,59 @@ mod tests {
                 .effective_context_window(),
             243_200
         );
+    }
+
+    #[test]
+    fn declared_extra_models_are_resolvable_and_apply_overrides() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("providers.json");
+        fs::write(
+            &path,
+            r#"{
+                "active": "primary",
+                "providers": {
+                    "primary": {
+                        "type": "openai_compatible",
+                        "base_url": "https://example.test/v1",
+                        "model": "main-model",
+                        "models": ["main-model", "alt-model"],
+                        "model_context_windows": {"alt-model": 64000},
+                        "capabilityOverrides": {"alt-model": {"vision": false}}
+                    }
+                }
+            }"#,
+        )
+        .expect("write provider fixture");
+        let registry = ProviderRegistry::load(&path).expect("provider registry");
+        let provider = registry
+            .resolve(Some("primary:alt-model"))
+            .expect("declared model");
+        assert_eq!(provider.model, "alt-model");
+        assert_eq!(provider.capabilities.context_window, 64_000);
+        assert!(!provider.capabilities.supports_vision);
+    }
+
+    #[test]
+    fn draft_providers_are_skipped_and_active_must_be_complete() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("providers.json");
+        fs::write(
+            &path,
+            r#"{
+                "active": "primary",
+                "providers": {
+                    "draft": {"type": "openai_compatible"},
+                    "primary": {
+                        "type": "openai_compatible",
+                        "base_url": "https://example.test/v1",
+                        "model": "main-model"
+                    }
+                }
+            }"#,
+        )
+        .expect("write provider fixture");
+        let registry = ProviderRegistry::load(&path).expect("provider registry");
+        assert_eq!(registry.choices().len(), 1);
     }
 
     #[test]

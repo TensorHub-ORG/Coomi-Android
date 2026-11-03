@@ -14,6 +14,39 @@ Coomi is a compact terminal coding agent organized as six workspace layers.
 Installed Skills are exposed to the agent through `list_skills` and
 `read_skill`, so full instructions are loaded only when a task needs them.
 
+## Agent foundation
+
+The runtime now carries the mature agent core used by Coomi Android:
+
+- **Agent loop**: transient provider failures retry with bounded backoff; image
+  protocol failures retry the same round without images; invalid tool arguments
+  get one correction round; repeated failing calls are blocked until their
+  arguments change.
+- **Execution**: independent read-only tools run concurrently, while mutations
+  and shells are serialized through a process-wide gate. Hosts can supply turn
+  control, and queued input is drained at model and tool boundaries.
+- **Recovery**: the TUI checkpoints the session after every durable step, so an
+  interrupted turn leaves a complete transcript on disk. Hosts can also use
+  `Agent::continue_interrupted_turn` and `Agent::check_task_completion` for
+  resumable or verified turns.
+- **Context**: compaction retains a full archive, summarizes oversized histories
+  in bounded chunks, supports remote Responses compaction with a local fallback,
+  and prunes oversized tool previews only in request copies.
+- **File history**: `write_file`, `edit_file`, and `apply_patch` record exact
+  before/after bytes under `<home>/turn-files/` for the current user turn.
+  Restoration is exposed as a service; shell side effects are explicitly marked
+  untracked, and MCP/external effects stay outside the journal.
+- **Sessions**: atomic writes, per-session titles, summaries and pinning, message
+  edit/delete/truncate, and archive persistence.
+- **Supporting services**: `capabilities` (model capability registry and probes),
+  `skill_router` (keyword/file/tool/project routing with reference safety),
+  `task_manager` (durable task queue with resource leases and conflict
+  baselines), and workflows (dependency-aware definitions plus a runner).
+
+Android-only runtime pieces (Termux/PRoot management, Shizuku, local
+model/OCR/TTS helpers, and DeepSeek account login) are intentionally absent from
+the desktop runtime. Use an OpenAI-compatible DeepSeek endpoint instead.
+
 ## Provider configuration
 
 Models are loaded exclusively from `~/.coomi/config/providers.json` (or
@@ -103,7 +136,10 @@ links, code spans, and fenced code blocks. The footer shows active context usage
 The built-in tool surface includes `local_shell`, `read_file`, `write_file`,
 `edit_file`, `apply_patch`, `list_dir`, `grep_files`, `web_search`, `view_image`,
 `request_user_input`, `spawn_agent`, `wait_agent`, `close_agent`, and
-`update_plan`, plus Loop, Memory, Skill, process, and configured MCP tools.
+`update_plan`, plus Loop, Memory, Skill, MCP management (`list_mcp`,
+`uninstall_skill`, `uninstall_mcp`), workflow definition, process, and configured
+MCP tools.
+
 Provider-native web search replaces the local fallback when declared. Image tool
 results use native multimodal content for Responses, Chat Completions, Anthropic,
 and Gemini instead of placing Base64 in ordinary text.

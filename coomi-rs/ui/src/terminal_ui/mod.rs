@@ -78,9 +78,9 @@ use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::enable_raw_mode;
-use ratatui::layout::Rect;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
 use serde_json::Value;
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -1105,7 +1105,10 @@ impl TuiState {
         self.status = format!("Plan mode exited — policy: {}", self.policy.label());
         self.push_notice(
             NoticeKind::Success,
-            format!("Plan mode exited. Policy restored to {}.", self.policy.label()),
+            format!(
+                "Plan mode exited. Policy restored to {}.",
+                self.policy.label()
+            ),
         );
     }
 }
@@ -1382,6 +1385,7 @@ fn start_agent_turn(
                 .with_mcp_runtime(Arc::new(McpRuntime::load(&home).await))
                 .with_memory(Arc::new(MemoryManager::new(&home, &cwd)))
                 .with_hooks(Arc::new(HookRunner::load(&home)?))
+                .with_file_history(home.clone(), session.id.to_string())
                 .with_agent_scheduler(scheduler, session.messages.clone());
             let provider = HttpModelProvider::new(provider_config)?;
             let observer = ChannelObserver {
@@ -1393,7 +1397,14 @@ fn start_agent_turn(
                 approve_all,
                 sender: task_tx.clone(),
             };
-            let agent = Agent::new(system_prompt).with_input_queue(input_queue);
+            let checkpoint_home = home.clone();
+            let agent = Agent::new(system_prompt)
+                .with_input_queue(input_queue)
+                .with_durable_checkpoint(Arc::new(move |session| {
+                    SessionStore::new(&checkpoint_home)
+                        .save(session)
+                        .map_err(|error| format!("{error:#}"))
+                }));
             let turn = if loop_continuation {
                 agent
                     .continue_loop(&mut session, &provider, &tools, &approval, &observer)
@@ -1484,6 +1495,7 @@ fn start_manual_compaction(app: &mut TuiState, runtime_tx: mpsc::UnboundedSender
                 .with_mcp_runtime(Arc::new(McpRuntime::load(&home).await))
                 .with_memory(Arc::new(MemoryManager::new(&home, &cwd)))
                 .with_hooks(Arc::new(HookRunner::load(&home)?))
+                .with_file_history(home.clone(), session.id.to_string())
                 .with_agent_scheduler(scheduler, session.messages.clone());
             let provider = HttpModelProvider::new(provider_config)?;
             Agent::new(prompt)
@@ -1793,7 +1805,28 @@ fn handle_runtime_event(app: &mut TuiState, runtime_event: RuntimeEvent) {
                         };
                     }
                 }
-                AgentEvent::TurnCompleted(_) => app.status = "Finalizing".into(),
+                AgentEvent::ConnectionRetry {
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    message,
+                } => {
+                    app.push_notice(
+                        NoticeKind::Warning,
+                        format!(
+                            "Reconnecting {attempt}/{max_attempts} in {delay_ms} ms: {message}"
+                        ),
+                    );
+                    app.status = "Reconnecting".into();
+                }
+                AgentEvent::StreamReset => app.status = "Resetting partial response".into(),
+                AgentEvent::ReasoningCompleted => {}
+                AgentEvent::PersistenceFailed(error) => app.push_notice(
+                    NoticeKind::Error,
+                    format!("Session persistence failed: {error}"),
+                ),
+                AgentEvent::ModelUsage { .. } => {}
+                AgentEvent::TurnCompleted { .. } => app.status = "Finalizing".into(),
             }
         }
         RuntimeEvent::TurnFinished {
@@ -4045,6 +4078,8 @@ fn model_matches(choice: &ModelChoice, query: &str) -> bool {
 fn session_matches(session: &SessionSummary, query: &str) -> bool {
     query.is_empty()
         || session.preview.to_ascii_lowercase().contains(query)
+        || session.title.to_ascii_lowercase().contains(query)
+        || session.summary.to_ascii_lowercase().contains(query)
         || session.model.to_ascii_lowercase().contains(query)
         || session.id.to_string().contains(query)
 }
@@ -4114,8 +4149,7 @@ mod tests {
         state.input_history.push("previous prompt".into());
 
         // Up/Down with empty editor → recall input history
-        handle_key(&mut state, KeyEvent::from(KeyCode::Up), sender.clone())
-            .expect("recall input");
+        handle_key(&mut state, KeyEvent::from(KeyCode::Up), sender.clone()).expect("recall input");
         assert_eq!(state.editor.text(), "previous prompt");
         assert!(state.follow_tail); // scroll unchanged
 

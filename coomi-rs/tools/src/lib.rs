@@ -1,4 +1,5 @@
 mod agents;
+mod execution_gate;
 mod patch;
 mod processes;
 
@@ -14,11 +15,15 @@ use coomi_engine::ToolCall;
 use coomi_engine::ToolResult;
 use coomi_engine::ToolRuntime;
 use coomi_engine::ToolSpec;
+use coomi_engine::WorkflowState;
+use coomi_engine::WorkflowStore;
 use coomi_security::Decision;
 use coomi_security::HookEvent;
 use coomi_security::HookRunner;
 use coomi_security::SecurityPolicy;
 use coomi_services::AutoConfigIntent;
+use coomi_services::FileEdit;
+use coomi_services::FileJournal;
 use coomi_services::McpRuntime;
 use coomi_services::MemoryManager;
 use coomi_services::MemoryScope;
@@ -46,6 +51,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 pub struct CoreTools {
     cwd: PathBuf,
     policy: SecurityPolicy,
+    file_history: Option<(PathBuf, String)>,
     skills_directory: Option<PathBuf>,
     config_home: Option<PathBuf>,
     max_output: usize,
@@ -56,7 +62,7 @@ pub struct CoreTools {
     mcp_runtime: Option<Arc<McpRuntime>>,
     memory: Option<Arc<MemoryManager>>,
     hooks: Option<Arc<HookRunner>>,
-    parent_history: Vec<coomi_engine::ChatMessage>,
+    parent_history: std::sync::RwLock<Vec<coomi_engine::ChatMessage>>,
 }
 
 impl CoreTools {
@@ -64,6 +70,7 @@ impl CoreTools {
         Self {
             cwd,
             policy,
+            file_history: None,
             skills_directory: None,
             config_home: None,
             max_output: DEFAULT_MAX_OUTPUT,
@@ -74,7 +81,7 @@ impl CoreTools {
             mcp_runtime: None,
             memory: None,
             hooks: None,
-            parent_history: Vec::new(),
+            parent_history: std::sync::RwLock::new(Vec::new()),
         }
     }
 
@@ -84,7 +91,13 @@ impl CoreTools {
         parent_history: Vec<coomi_engine::ChatMessage>,
     ) -> Self {
         self.agent_scheduler = Some(scheduler);
-        self.parent_history = parent_history;
+        self.parent_history = std::sync::RwLock::new(parent_history);
+        self
+    }
+
+    /// Track file mutations per user turn so the UI can offer a durable undo.
+    pub fn with_file_history(mut self, home: PathBuf, session_id: String) -> Self {
+        self.file_history = Some((home, session_id));
         self
     }
 
@@ -106,6 +119,63 @@ impl CoreTools {
     pub fn with_config_home(mut self, home: PathBuf) -> Self {
         self.config_home = Some(home);
         self
+    }
+
+    fn file_journal(&self) -> Result<Option<FileJournal>, String> {
+        let Some((home, session_id)) = &self.file_history else {
+            return Ok(None);
+        };
+        let history = self
+            .parent_history
+            .read()
+            .map_err(|_| "file history lock poisoned")?;
+        let Some(turn) = history.iter().rev().find(|message| {
+            message.role == coomi_engine::Role::User
+                && !message.internal
+                && !message.compaction_summary
+        }) else {
+            return Err("cannot identify the user turn for file history".into());
+        };
+        FileJournal::new(home, &self.cwd, session_id, &turn.id)
+            .map(Some)
+            .map_err(|error| format!("{error:#}"))
+    }
+
+    fn write_with_history(
+        &self,
+        path: &std::path::Path,
+        before: Option<Vec<u8>>,
+        after: Vec<u8>,
+    ) -> Result<(), String> {
+        if let Some(journal) = self.file_journal()? {
+            if journal.relative_path(path).is_ok() {
+                return journal
+                    .apply(vec![FileEdit {
+                        path: path.to_path_buf(),
+                        before,
+                        after: Some(after),
+                        after_mode: None,
+                    }])
+                    .map_err(|error| format!("{error:#}"));
+            }
+            journal
+                .mark_untracked(
+                    "this turn wrote outside the workspace or to a path that cannot be backed up; these changes cannot be undone automatically",
+                )
+                .map_err(|error| format!("{error:#}"))?;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(path, after).map_err(|error| error.to_string())
+    }
+
+    fn mark_shell_untracked(&self) {
+        if let Ok(Some(journal)) = self.file_journal() {
+            let _ = journal.mark_untracked(
+                "a shell command may have changed files outside the tracked file tools",
+            );
+        }
     }
 
     pub fn with_mcp_runtime(mut self, runtime: Arc<McpRuntime>) -> Self {
@@ -156,6 +226,14 @@ impl CoreTools {
             "memory_delete" => self.memory_delete(call, approval).await,
             "configure_mcp" => self.configure_mcp(call, approval).await,
             "install_skill" => self.install_skill(call, approval).await,
+            "uninstall_skill" => self.uninstall_skill(call, approval).await,
+            "uninstall_mcp" => self.uninstall_mcp(call, approval).await,
+            "list_mcp" => self.list_mcp(),
+            "list_workflows" => self.list_workflows(),
+            "create_workflow" => self.create_workflow(&call.arguments),
+            "get_workflow" => self.get_workflow(&call.arguments),
+            "save_workflow" => self.save_workflow(&call.arguments),
+            "delete_workflow" => self.delete_workflow(call, approval).await,
             _ => {
                 if let Some(runtime) = &self.mcp_runtime
                     && let Some(result) = runtime.call(&call.name, call.arguments.clone()).await
@@ -164,6 +242,12 @@ impl CoreTools {
                 }
                 ToolResult::error(format!("unknown tool: {}", call.name))
             }
+        }
+    }
+
+    async fn reload_mcp(&self, home: &std::path::Path) {
+        if let Some(runtime) = &self.mcp_runtime {
+            runtime.reload(home).await;
         }
     }
 
@@ -195,10 +279,13 @@ impl CoreTools {
                 })
                 .unwrap_or_default();
             return match CatalogInstaller::new(home).install_mcp(catalog_id, &values) {
-                Ok(path) => ToolResult::success(format!(
-                    "Configured catalog MCP `{catalog_id}` at {}",
-                    path.display()
-                )),
+                Ok(path) => {
+                    self.reload_mcp(home).await;
+                    ToolResult::success(format!(
+                        "Configured catalog MCP `{catalog_id}` at {}",
+                        path.display()
+                    ))
+                }
                 Err(error) => ToolResult::error(format!("{error:#}")),
             };
         }
@@ -218,7 +305,10 @@ impl CoreTools {
         )
         .await
         {
-            Ok(result) => ToolResult::success(result.message),
+            Ok(result) => {
+                self.reload_mcp(home).await;
+                ToolResult::success(result.message)
+            }
             Err(error) => ToolResult::error(format!("{error:#}")),
         }
     }
@@ -260,6 +350,182 @@ impl CoreTools {
         }
     }
 
+    /// Permanently remove an installed Skill: its directory and config entry.
+    async fn uninstall_skill(&self, call: &ToolCall, approval: &dyn ApprovalHandler) -> ToolResult {
+        let Some(home) = &self.config_home else {
+            return ToolResult::error("Coomi configuration directory is not available");
+        };
+        if !approval
+            .approve(
+                call,
+                "uninstall_skill permanently deletes the Skill directory and its configuration",
+            )
+            .await
+        {
+            return ToolResult::error("Skill uninstall was not approved");
+        }
+        let Some(name) = string_arg(&call.arguments, "name") else {
+            return ToolResult::error("missing string argument: name");
+        };
+        match coomi_services::remove_installed_skill(home, name) {
+            Ok(()) => ToolResult::success(format!(
+                "Uninstalled Skill `{name}`: directory and configuration removed"
+            )),
+            Err(error) => ToolResult::error(format!("{error:#}")),
+        }
+    }
+
+    /// Permanently remove an MCP server configuration.
+    async fn uninstall_mcp(&self, call: &ToolCall, approval: &dyn ApprovalHandler) -> ToolResult {
+        let Some(home) = &self.config_home else {
+            return ToolResult::error("Coomi configuration directory is not available");
+        };
+        if !approval
+            .approve(
+                call,
+                "uninstall_mcp permanently removes the MCP server configuration",
+            )
+            .await
+        {
+            return ToolResult::error("MCP uninstall was not approved");
+        }
+        let Some(name) = string_arg(&call.arguments, "name") else {
+            return ToolResult::error("missing string argument: name");
+        };
+        match coomi_services::remove_configured_mcp(home, name) {
+            Ok(()) => {
+                self.reload_mcp(home).await;
+                ToolResult::success(format!(
+                    "Uninstalled MCP server `{name}`: configuration removed and tools refreshed"
+                ))
+            }
+            Err(error) => ToolResult::error(format!("{error:#}")),
+        }
+    }
+
+    /// List configured and enabled MCP servers before calling their tools.
+    fn list_mcp(&self) -> ToolResult {
+        let Some(runtime) = &self.mcp_runtime else {
+            return ToolResult::success("no MCP servers configured");
+        };
+        let statuses = runtime.statuses();
+        if statuses.is_empty() {
+            return ToolResult::success("no MCP servers configured");
+        }
+        let mut lines = Vec::new();
+        for status in statuses {
+            let state = if !status.enabled {
+                "disabled".to_string()
+            } else if let Some(error) = &status.error {
+                format!("failed: {error}")
+            } else {
+                "enabled".to_string()
+            };
+            lines.push(format!(
+                "- {} ({}, {state}, {} tool(s))",
+                status.name, status.transport, status.tools_count
+            ));
+        }
+        ToolResult::success(lines.join("\n"))
+    }
+
+    fn workflow_store(&self) -> Result<WorkflowStore, String> {
+        let Some(home) = &self.config_home else {
+            return Err("workflow store not available: config home not configured".into());
+        };
+        Ok(WorkflowStore::new(home.as_path()))
+    }
+
+    fn list_workflows(&self) -> ToolResult {
+        let store = match self.workflow_store() {
+            Ok(store) => store,
+            Err(error) => return ToolResult::error(error),
+        };
+        match store.list_ids() {
+            Ok(ids) if ids.is_empty() => ToolResult::success("no workflows registered"),
+            Ok(ids) => ToolResult::success(ids.join("\n")),
+            Err(error) => ToolResult::error(format!("failed to list workflows: {error}")),
+        }
+    }
+
+    fn get_workflow(&self, arguments: &Value) -> ToolResult {
+        let Some(id) = string_arg(arguments, "id") else {
+            return ToolResult::error("missing string argument: id");
+        };
+        let store = match self.workflow_store() {
+            Ok(store) => store,
+            Err(error) => return ToolResult::error(error),
+        };
+        match store.read(id) {
+            Ok(workflow) => ToolResult::success(
+                serde_json::to_string_pretty(&workflow).unwrap_or_else(|_| "{}".into()),
+            ),
+            Err(error) => ToolResult::error(format!("failed to read workflow: {error}")),
+        }
+    }
+
+    fn workflow_from_arguments(&self, arguments: &Value) -> Result<WorkflowState, String> {
+        let value = arguments
+            .get("workflow")
+            .cloned()
+            .unwrap_or_else(|| arguments.clone());
+        serde_json::from_value::<WorkflowState>(value)
+            .map_err(|error| format!("invalid workflow: {error}"))
+    }
+
+    fn create_workflow(&self, arguments: &Value) -> ToolResult {
+        let workflow = match self.workflow_from_arguments(arguments) {
+            Ok(workflow) => workflow,
+            Err(error) => return ToolResult::error(error),
+        };
+        let store = match self.workflow_store() {
+            Ok(store) => store,
+            Err(error) => return ToolResult::error(error),
+        };
+        match store.save(&workflow) {
+            Ok(()) => ToolResult::success(format!("workflow `{}` created", workflow.id)),
+            Err(error) => ToolResult::error(format!("failed to create workflow: {error}")),
+        }
+    }
+
+    fn save_workflow(&self, arguments: &Value) -> ToolResult {
+        let workflow = match self.workflow_from_arguments(arguments) {
+            Ok(workflow) => workflow,
+            Err(error) => return ToolResult::error(error),
+        };
+        let store = match self.workflow_store() {
+            Ok(store) => store,
+            Err(error) => return ToolResult::error(error),
+        };
+        match store.save(&workflow) {
+            Ok(()) => ToolResult::success(format!("workflow `{}` saved", workflow.id)),
+            Err(error) => ToolResult::error(format!("failed to save workflow: {error}")),
+        }
+    }
+
+    async fn delete_workflow(&self, call: &ToolCall, approval: &dyn ApprovalHandler) -> ToolResult {
+        let Some(id) = string_arg(&call.arguments, "id") else {
+            return ToolResult::error("missing string argument: id");
+        };
+        if !approval
+            .approve(
+                call,
+                "delete_workflow permanently removes the workflow definition",
+            )
+            .await
+        {
+            return ToolResult::error("workflow deletion was not approved");
+        }
+        let store = match self.workflow_store() {
+            Ok(store) => store,
+            Err(error) => return ToolResult::error(error),
+        };
+        match store.remove(id) {
+            Ok(()) => ToolResult::success(format!("workflow `{id}` deleted")),
+            Err(error) => ToolResult::error(format!("failed to delete workflow: {error}")),
+        }
+    }
+
     async fn spawn_agent(&self, arguments: &Value) -> ToolResult {
         let Some(scheduler) = &self.agent_scheduler else {
             return ToolResult::error("agent scheduler is not configured");
@@ -268,10 +534,11 @@ impl CoreTools {
             return ToolResult::error("missing string argument: task");
         };
         let fork_turns = string_arg(arguments, "fork_turns");
-        match scheduler
-            .spawn(task.to_owned(), &self.parent_history, fork_turns)
-            .await
-        {
+        let history = match self.parent_history.read() {
+            Ok(history) => history.clone(),
+            Err(_) => return ToolResult::error("parent history lock poisoned"),
+        };
+        match scheduler.spawn(task.to_owned(), &history, fork_turns).await {
             Ok(id) => ToolResult::success(format!("agent_id: {id}")),
             Err(error) => ToolResult::error(error),
         }
@@ -366,7 +633,13 @@ impl CoreTools {
                     }
                 }
             }
+            self.mark_shell_untracked();
         }
+        let _guard = if action == "exec" {
+            Some(execution_gate::enter(false).await)
+        } else {
+            None
+        };
         self.processes.execute(&self.cwd, &call.arguments).await
     }
 
@@ -374,14 +647,32 @@ impl CoreTools {
         let Some(patch_text) = string_arg(&call.arguments, "patch") else {
             return ToolResult::error("missing string argument: patch");
         };
-        if self.policy.mode() == coomi_security::AccessMode::FullAccess
+        let removes_files = match patch::removes_files(patch_text) {
+            Ok(removes_files) => removes_files,
+            Err(error) => return ToolResult::error(error),
+        };
+        let needs_approval =
+            self.policy.mode() == coomi_security::AccessMode::FullAccess || removes_files;
+        if needs_approval
             && !approval
-                .approve(call, "apply_patch will modify files")
+                .approve(
+                    call,
+                    if removes_files {
+                        "apply_patch will delete or move files"
+                    } else {
+                        "apply_patch will modify files"
+                    },
+                )
                 .await
         {
             return ToolResult::error("patch was not approved");
         }
-        match patch::apply_patch(&self.policy, patch_text) {
+        let journal = match self.file_journal() {
+            Ok(journal) => journal,
+            Err(error) => return ToolResult::error(error),
+        };
+        let _guard = execution_gate::enter(false).await;
+        match patch::apply_patch_with_journal(&self.policy, None, patch_text, journal.as_ref()) {
             Ok(output) => ToolResult::success(output),
             Err(error) => ToolResult::error(error),
         }
@@ -830,12 +1121,16 @@ impl CoreTools {
                 parent.display()
             ));
         }
-        match tokio::fs::write(&path, content).await {
-            Ok(()) => ToolResult::success(format!(
-                "wrote {} bytes to {}",
-                content.len(),
-                path.display()
-            )),
+        let before = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return ToolResult::error(format!("cannot back up file: {error}")),
+        };
+        let bytes = content.as_bytes().to_vec();
+        let length = bytes.len();
+        let _guard = execution_gate::enter(false).await;
+        match self.write_with_history(&path, before, bytes) {
+            Ok(()) => ToolResult::success(format!("wrote {length} bytes to {}", path.display())),
             Err(error) => ToolResult::error(format!("failed to write {}: {error}", path.display())),
         }
     }
@@ -864,9 +1159,6 @@ impl CoreTools {
             }
         };
         let matches = content.matches(old_string).count();
-        if matches == 0 {
-            return ToolResult::error("old_string was not found");
-        }
         let replace_all = arguments
             .get("replace_all")
             .and_then(Value::as_bool)
@@ -876,12 +1168,23 @@ impl CoreTools {
                 "old_string matched {matches} locations; set replace_all=true or provide more context"
             ));
         }
-        let updated = if replace_all {
+        let updated = if matches == 0 {
+            // Tolerate CRLF and trailing-whitespace drift while still requiring an
+            // unambiguous match in the original file.
+            let Some((start, end)) = fuzzy_normalized_range(&content, old_string) else {
+                return ToolResult::error("old_string was not found");
+            };
+            let mut updated = content.clone();
+            updated.replace_range(start..end, new_string);
+            updated
+        } else if replace_all {
             content.replace(old_string, new_string)
         } else {
             content.replacen(old_string, new_string, 1)
         };
-        match tokio::fs::write(&path, updated).await {
+        let before = content.into_bytes();
+        let _guard = execution_gate::enter(false).await;
+        match self.write_with_history(&path, Some(before), updated.into_bytes()) {
             Ok(()) => ToolResult::success(format!("edited {}", path.display())),
             Err(error) => ToolResult::error(format!("failed to edit {}: {error}", path.display())),
         }
@@ -950,6 +1253,8 @@ impl CoreTools {
         let timeout_ms = u64_arg(&call.arguments, "timeout_ms")
             .unwrap_or(DEFAULT_TIMEOUT_MS)
             .clamp(1_000, 300_000);
+        self.mark_shell_untracked();
+        let _guard = execution_gate::enter(false).await;
         let mut process = platform_shell(command);
         process
             .current_dir(&self.cwd)
@@ -1307,6 +1612,85 @@ impl ToolRuntime for CoreTools {
                         "additionalProperties": false
                     }),
                 },
+                ToolSpec {
+                    name: "uninstall_skill".into(),
+                    description: "Permanently uninstall a Skill by name: deletes its directory under the Coomi skills folder and removes the config/skills.json entry. Cannot be undone.".into(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                        "additionalProperties": false
+                    }),
+                },
+                ToolSpec {
+                    name: "uninstall_mcp".into(),
+                    description: "Permanently uninstall an MCP server by name: removes its entry from config/mcp_servers.json. Cannot be undone.".into(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                        "additionalProperties": false
+                    }),
+                },
+                ToolSpec {
+                    name: "list_workflows".into(),
+                    description: "List all registered executable workflows by id.".into(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                    }),
+                },
+                ToolSpec {
+                    name: "create_workflow".into(),
+                    description: "Define and save a new workflow. Provide a full workflow JSON object with id, name, steps (each with id, action, depends_on).".into(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "description": {"type": "string"},
+                            "steps": {"type": "array"},
+                            "model_isolation": {"type": "boolean"}
+                        },
+                        "required": ["id", "name", "steps"],
+                        "additionalProperties": true
+                    }),
+                },
+                ToolSpec {
+                    name: "get_workflow".into(),
+                    description: "Read and pretty-print one workflow definition by id.".into(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                        "required": ["id"],
+                        "additionalProperties": false
+                    }),
+                },
+                ToolSpec {
+                    name: "save_workflow".into(),
+                    description: "Overwrite/update an existing workflow definition. Provide the full workflow JSON object.".into(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "steps": {"type": "array"}
+                        },
+                        "required": ["id", "name", "steps"],
+                        "additionalProperties": true
+                    }),
+                },
+                ToolSpec {
+                    name: "delete_workflow".into(),
+                    description: "Delete a workflow definition and its registration by id.".into(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                        "required": ["id"],
+                        "additionalProperties": false
+                    }),
+                },
             ]);
         }
         if self.agent_scheduler.is_some() {
@@ -1350,12 +1734,27 @@ impl ToolRuntime for CoreTools {
             ]);
         }
         if let Some(runtime) = &self.mcp_runtime {
+            specs.push(ToolSpec {
+                name: "list_mcp".into(),
+                description: "List configured and enabled MCP servers with their transport. Useful before calling their tools.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            });
             specs.extend(runtime.specs());
         }
         if self.memory.is_some() {
             specs.extend(memory_specs());
         }
         specs
+    }
+
+    fn update_history(&self, messages: &[coomi_engine::ChatMessage]) {
+        if let Ok(mut history) = self.parent_history.write() {
+            *history = messages.to_vec();
+        }
     }
 
     async fn call(&self, call: &ToolCall, approval: &dyn ApprovalHandler) -> ToolResult {
@@ -1494,6 +1893,54 @@ fn memory_specs() -> Vec<ToolSpec> {
 
 fn string_arg<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
+}
+
+/// Normalized edit matching: collapse CRLF and trailing whitespace before
+/// searching, then map the hit back to the original byte range.
+fn fuzzy_normalized_range(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    fn normalize(input: &str) -> (String, Vec<usize>) {
+        let bytes = input.as_bytes();
+        let mut normalized = Vec::with_capacity(bytes.len());
+        let mut map = Vec::with_capacity(bytes.len());
+        let mut index = 0;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            if byte == b'\r' {
+                index += 1;
+                continue;
+            }
+            if byte == b' ' || byte == b'\t' {
+                let mut next = index;
+                while next < bytes.len() && (bytes[next] == b' ' || bytes[next] == b'\t') {
+                    next += 1;
+                }
+                let at_line_end = next < bytes.len()
+                    && (bytes[next] == b'\n'
+                        || (bytes[next] == b'\r'
+                            && next + 1 < bytes.len()
+                            && bytes[next + 1] == b'\n'));
+                if at_line_end {
+                    index = next;
+                    continue;
+                }
+            }
+            normalized.push(byte);
+            map.push(index);
+            index += 1;
+        }
+        (String::from_utf8_lossy(&normalized).into_owned(), map)
+    }
+
+    let (normalized_content, content_map) = normalize(haystack);
+    let (normalized_needle, _) = normalize(needle);
+    if normalized_needle.is_empty() {
+        return None;
+    }
+    let found = normalized_content.find(&normalized_needle)?;
+    let from = *content_map.get(found)?;
+    let last = found + normalized_needle.len() - 1;
+    let to = content_map.get(last).map(|value| *value + 1)?;
+    Some((from, to))
 }
 
 fn usize_arg(value: &Value, key: &str) -> Option<usize> {
@@ -1685,6 +2132,137 @@ mod tests {
         assert_eq!(result.images[0].media_type, "image/png");
         assert_eq!(result.images[0].data, "AQIDBA==");
         assert!(!result.output.contains("base64"));
+    }
+
+    #[tokio::test]
+    async fn fuzzy_edit_tolerates_crlf_and_trailing_whitespace() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let file = workspace.path().join("sample.txt");
+        let crlf = String::from_utf8(vec![13, 10]).expect("crlf");
+        let lf = String::from_utf8(vec![10]).expect("lf");
+        std::fs::write(&file, format!("alpha{crlf}beta   {crlf}gamma{crlf}"))
+            .expect("write fixture");
+        let policy = SecurityPolicy::new(workspace.path(), AccessMode::WorkspaceWrite)
+            .expect("security policy");
+        let tools = CoreTools::new(workspace.path().to_path_buf(), policy);
+        let old = format!("beta{lf}gamma");
+        let new = format!("BETA{lf}GAMMA");
+        let result = tools
+            .call(
+                &ToolCall {
+                    id: "1".into(),
+                    name: "edit_file".into(),
+                    arguments: json!({
+                        "path": "sample.txt",
+                        "old_string": old,
+                        "new_string": new
+                    }),
+                },
+                &Deny,
+            )
+            .await;
+        assert!(result.success, "{}", result.output);
+        let updated = std::fs::read_to_string(&file).expect("read result");
+        assert!(updated.contains(&format!("BETA{lf}GAMMA")));
+        assert!(!updated.contains("beta"));
+    }
+
+    #[tokio::test]
+    async fn file_history_records_and_restores_a_turn() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let home = tempfile::tempdir().expect("temporary home");
+        let session = uuid::Uuid::new_v4().to_string();
+        let policy = SecurityPolicy::new(workspace.path(), AccessMode::WorkspaceWrite)
+            .expect("security policy");
+        let tools = CoreTools::new(workspace.path().to_path_buf(), policy)
+            .with_file_history(home.path().to_path_buf(), session.clone());
+        let user = coomi_engine::ChatMessage::user("write a file");
+        let turn = user.id.clone();
+        tools.update_history(&[user]);
+        let result = tools
+            .call(
+                &ToolCall {
+                    id: "1".into(),
+                    name: "write_file".into(),
+                    arguments: json!({"path": "created.txt", "content": "hello"}),
+                },
+                &Deny,
+            )
+            .await;
+        assert!(result.success, "{}", result.output);
+        let journal =
+            FileJournal::new(home.path(), workspace.path(), &session, &turn).expect("journal");
+        let preview = journal.preview().expect("preview");
+        assert!(preview.available);
+        assert_eq!(preview.files.len(), 1);
+        journal
+            .restore_with(&preview.revision, || Ok(()))
+            .expect("restore");
+        assert!(!workspace.path().join("created.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn workflow_tools_roundtrip_through_the_engine_store() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let home = tempfile::tempdir().expect("temporary home");
+        let policy =
+            SecurityPolicy::new(workspace.path(), AccessMode::ReadOnly).expect("security policy");
+        let tools = CoreTools::new(workspace.path().to_path_buf(), policy)
+            .with_config_home(home.path().to_path_buf());
+        let workflow = json!({
+            "id": "demo",
+            "name": "Demo",
+            "steps": [{
+                "id": "first",
+                "name": "First",
+                "action": {"kind": "model", "prompt": "hello"}
+            }]
+        });
+        let result = tools
+            .call(
+                &ToolCall {
+                    id: "1".into(),
+                    name: "create_workflow".into(),
+                    arguments: workflow,
+                },
+                &Deny,
+            )
+            .await;
+        assert!(result.success, "{}", result.output);
+        let listed = tools
+            .call(
+                &ToolCall {
+                    id: "2".into(),
+                    name: "list_workflows".into(),
+                    arguments: json!({}),
+                },
+                &Deny,
+            )
+            .await;
+        assert_eq!(listed.output, "demo");
+        let read = tools
+            .call(
+                &ToolCall {
+                    id: "3".into(),
+                    name: "get_workflow".into(),
+                    arguments: json!({"id": "demo"}),
+                },
+                &Deny,
+            )
+            .await;
+        assert!(read.success);
+        assert!(read.output.contains("\"first\""));
+        let deleted = tools
+            .call(
+                &ToolCall {
+                    id: "4".into(),
+                    name: "delete_workflow".into(),
+                    arguments: json!({"id": "demo"}),
+                },
+                &Approve,
+            )
+            .await;
+        assert!(deleted.success, "{}", deleted.output);
     }
 
     #[tokio::test]

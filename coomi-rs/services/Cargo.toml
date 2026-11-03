@@ -12,13 +12,16 @@ anyhow.workspace = true
 async-trait.workspace = true
 coomi-engine = { path = "../engine" }
 chrono.workspace = true
+fs2.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 md5.workspace = true
+sha2.workspace = true
 tokio.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -47,8 +47,14 @@ pub struct HookOutcome {
 
 #[derive(Clone, Debug, Deserialize)]
 struct HookConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
     #[serde(default = "default_matcher")]
     matcher: String,
+    #[serde(default)]
+    keyword: String,
+    #[serde(default)]
+    keyword_match: KeywordMatch,
     command: String,
     #[serde(default)]
     args: Vec<String>,
@@ -56,6 +62,15 @@ struct HookConfig {
     timeout_ms: u64,
     #[serde(default)]
     env: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum KeywordMatch {
+    #[default]
+    Disabled,
+    Exact,
+    Contains,
 }
 
 #[derive(Default, Deserialize)]
@@ -106,7 +121,13 @@ impl HookRunner {
             return Ok(aggregate);
         };
         for hook in hooks {
+            if !hook.enabled {
+                continue;
+            }
             if !matches_subject(&hook.matcher, subject) {
+                continue;
+            }
+            if !matches_keyword(hook, &payload) {
                 continue;
             }
             let outcome = run_hook(hook, event, payload.clone()).await?;
@@ -134,6 +155,30 @@ impl HookRunner {
         }
         Ok(aggregate)
     }
+}
+
+fn matches_keyword(hook: &HookConfig, payload: &Value) -> bool {
+    if hook.keyword_match == KeywordMatch::Disabled {
+        return true;
+    }
+    let keyword = hook.keyword.trim();
+    if keyword.is_empty() {
+        return false;
+    }
+    let Some(prompt) = payload.get("prompt").and_then(Value::as_str) else {
+        return false;
+    };
+    match hook.keyword_match {
+        KeywordMatch::Disabled => true,
+        KeywordMatch::Exact => prompt
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .eq_ignore_ascii_case(keyword),
+        KeywordMatch::Contains => contains_ignore_ascii_case(prompt, keyword),
+    }
+}
+
+fn contains_ignore_ascii_case(value: &str, needle: &str) -> bool {
+    value.to_lowercase().contains(&needle.to_lowercase())
 }
 
 async fn run_hook(hook: &HookConfig, event: HookEvent, payload: Value) -> Result<HookOutcome> {
@@ -198,5 +243,44 @@ mod tests {
         assert!(matches_subject("*", Some("local_shell")));
         assert!(matches_subject("read_file", Some("READ_FILE")));
         assert!(!matches_subject("read_file", Some("write_file")));
+    }
+
+    fn keyword_hook(mode: KeywordMatch, keyword: &str) -> HookConfig {
+        HookConfig {
+            enabled: true,
+            matcher: "*".into(),
+            keyword: keyword.into(),
+            keyword_match: mode,
+            command: "/bin/true".into(),
+            args: Vec::new(),
+            timeout_ms: default_timeout_ms(),
+            env: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn exact_keyword_allows_surrounding_symbols_only() {
+        let hook = keyword_hook(KeywordMatch::Exact, "开始备份");
+        assert!(matches_keyword(
+            &hook,
+            &serde_json::json!({"prompt": "  【开始备份！】  "})
+        ));
+        assert!(!matches_keyword(
+            &hook,
+            &serde_json::json!({"prompt": "请开始备份！"})
+        ));
+    }
+
+    #[test]
+    fn contains_keyword_matches_inside_sentence() {
+        let hook = keyword_hook(KeywordMatch::Contains, "Build APK");
+        assert!(matches_keyword(
+            &hook,
+            &serde_json::json!({"prompt": "please build apk now"})
+        ));
+        assert!(!matches_keyword(
+            &hook,
+            &serde_json::json!({"prompt": "run tests"})
+        ));
     }
 }
