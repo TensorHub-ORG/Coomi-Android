@@ -174,7 +174,8 @@ public final class UpdateChecker {
                     notes = "这是测试版本，可能不稳定。\n\n" + notes;
                 }
                 boolean hasUpdate = chosen.optInt("versionCode", 0) > current;
-                if (hasUpdate && autoInstall && !apkUrl.isEmpty()) {
+                // 测试版只提示、不自动安装，避免稳定用户被静默升级到测试通道。
+                if (hasUpdate && autoInstall && !chooseTest && !apkUrl.isEmpty()) {
                     downloadAndInstall(context, apkUrl, version);
                 }
                 final String finalVersion = version;
@@ -303,11 +304,14 @@ public final class UpdateChecker {
                 } else if (!hasUpdate) {
                     Toast.makeText(context, "已是最新版本（" + version + "）", Toast.LENGTH_SHORT).show();
                 } else {
-                    String message = notes == null || notes.isEmpty()
-                        ? "正在后台下载更新包，完成后自动弹出安装。"
-                        : notes + "\n\n正在后台下载更新包，完成后自动弹出安装。";
-                    if (version != null && version.contains("测试版")) {
-                        message = "这是测试版本，可能不稳定，正式使用请等待正式更新。\n\n" + message;
+                    boolean testVersion = version != null && version.contains("测试版");
+                    String message;
+                    if (testVersion) {
+                        message = "这是测试版本，可能不稳定，正式使用请等待正式更新。\n\n请前往「检查更新」页面选择测试通道手动下载安装。";
+                    } else {
+                        message = notes == null || notes.isEmpty()
+                            ? "正在后台下载更新包，完成后自动弹出安装。"
+                            : notes + "\n\n正在后台下载更新包，完成后自动弹出安装。";
                     }
                     new AlertDialog.Builder(context)
                         .setTitle("发现新版本 " + version)
